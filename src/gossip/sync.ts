@@ -1,6 +1,7 @@
 import { db } from "../storage/db";
 import { GossipMessage } from "../types";
 import { validateGossipMessage } from "../validation/verifier";
+import { broadcastToClients } from "../api/ws";
 
 /**
  * Get hashes of messages we have since a timestamp.
@@ -98,7 +99,11 @@ export async function storeGossipMessage(msg: GossipMessage, fromHubId: string):
     ]
   );
 
-  return (result.rowCount ?? 0) > 0;
+  const stored = (result.rowCount ?? 0) > 0;
+  if (stored) {
+    broadcastToClients("new_message", { hash: msg.hash, tid: msg.tid, type: msg.type });
+  }
+  return stored;
 }
 
 /**
