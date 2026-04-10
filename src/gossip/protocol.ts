@@ -172,6 +172,7 @@ async function handlePeerMessage(
     case "have": {
       // Peer tells us what hashes they have
       const payload = msg.payload as HavePayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
       const missing = await findMissingHashes(payload.hashes);
       if (missing.length > 0) {
         send(ws, {
@@ -186,6 +187,7 @@ async function handlePeerMessage(
     case "want": {
       // Peer wants specific messages from us
       const payload = msg.payload as WantPayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
       const messages = await getMessagesByHashes(payload.hashes);
       if (messages.length > 0) {
         send(ws, {
@@ -200,6 +202,10 @@ async function handlePeerMessage(
     case "messages": {
       // Received messages from peer -- validate and store
       const payload = msg.payload as MessagesPayload;
+      if (!Array.isArray(payload.messages) || payload.messages.length > 1000) {
+        console.warn(`Rejected messages payload from ${msg.hubId}: invalid or too large (${payload.messages?.length})`);
+        break;
+      }
       let stored = 0;
       for (const message of payload.messages) {
         const ok = await storeGossipMessage(message, msg.hubId);
