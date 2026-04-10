@@ -17,8 +17,8 @@ export async function healthRoutes(server: FastifyInstance): Promise<void> {
       tidCount = tidResult.rows[0]?.count ?? 0;
 
       dbOk = true;
-    } catch {
-      // DB is down
+    } catch (err) {
+      console.error("Health check DB query failed:", err);
     }
 
     return {

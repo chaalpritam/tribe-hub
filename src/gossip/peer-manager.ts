@@ -5,8 +5,6 @@ import { upsertPeer } from "./sync";
 
 // Track reconnect attempts per URL
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const RECONNECT_DELAY_MS = 10_000; // 10 seconds between reconnect attempts
-const PING_INTERVAL_MS = 30_000; // 30 seconds between pings
 
 /**
  * Connect to a peer hub via WebSocket.
@@ -67,7 +65,7 @@ function scheduleReconnect(url: string): void {
   const timer = setTimeout(() => {
     reconnectTimers.delete(url);
     connectToPeer(url);
-  }, RECONNECT_DELAY_MS);
+  }, config.reconnectDelayMs);
 
   reconnectTimers.set(url, timer);
 }
@@ -103,7 +101,7 @@ export function startPeerManager(): void {
         peers.delete(hubId);
       }
     }
-  }, PING_INTERVAL_MS);
+  }, config.pingIntervalMs);
 
   console.log(`Peer manager started. Seed peers: ${config.peers.length}`);
 }

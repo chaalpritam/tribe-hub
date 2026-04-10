@@ -3,6 +3,7 @@ import { SubmitMessageRequest, GossipMessage } from "../../types";
 import { validateMessage } from "../../validation/verifier";
 import { db } from "../../storage/db";
 import { gossipMessage } from "../../gossip/protocol";
+import { broadcastToClients } from "../ws";
 
 // Message types
 const TWEET_ADD = 1;
@@ -32,6 +33,8 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
           parent_hash?: string;
           channel_id?: string;
         };
+        // Convert mentions from string[] to number[] for BIGINT[] column
+        const mentionsBigint = (tweetBody.mentions || []).map((m) => parseInt(m, 10)).filter((n) => !isNaN(n));
         await db.query(
           `INSERT INTO messages (hash, tid, type, text, parent_hash, channel_id, mentions, embeds, timestamp, signature, signer)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -43,7 +46,7 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             tweetBody.text,
             tweetBody.parent_hash || null,
             tweetBody.channel_id || null,
-            tweetBody.mentions || [],
+            mentionsBigint,
             tweetBody.embeds || [],
             new Date(message.data.timestamp * 1000),
             message.signature,
@@ -134,13 +137,16 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
       text: (body as { text?: string }).text || null,
       parentHash: (body as { parent_hash?: string }).parent_hash || null,
       channelId: (body as { channel_id?: string }).channel_id || null,
-      mentions: (body as { mentions?: string[] }).mentions || [],
+      mentions: ((body as { mentions?: string[] }).mentions || []).map((m) => parseInt(m, 10).toString()).filter((m) => m !== "NaN"),
       embeds: (body as { embeds?: string[] }).embeds || [],
       timestamp: new Date(message.data.timestamp * 1000).toISOString(),
       signature: message.signature,
       signer: message.signer,
     };
     gossipMessage(gossipMsg);
+
+    // Notify connected browser clients
+    broadcastToClients("new_message", { hash: message.hash, tid: message.data.tid, type: messageType });
 
     return { hash: message.hash };
   });

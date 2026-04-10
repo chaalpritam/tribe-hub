@@ -22,7 +22,8 @@ async function main() {
   await server.listen({ port: config.port, host: "0.0.0.0" });
 
   console.log(`Tribe Hub [${config.hubId}] running on port ${config.port}`);
-  console.log(`Gossip WebSocket: ws://localhost:${config.port}/gossip`);
+  console.log(`Gossip WebSocket: ws://0.0.0.0:${config.port}/gossip`);
+  console.log(`Client WebSocket: ws://0.0.0.0:${config.port}/v1/ws`);
   console.log(`Seed peers: ${config.peers.length}`);
   console.log(`Connected peers: ${getPeerCount()}`);
 }

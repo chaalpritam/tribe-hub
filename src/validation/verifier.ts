@@ -2,8 +2,7 @@ import nacl from "tweetnacl";
 import { SubmitMessageRequest, GossipMessage } from "../types";
 import { appKeyCache } from "./app-key-cache";
 import { db } from "../storage/db";
-
-const MAX_TWEET_TEXT_LENGTH = 320;
+import { config } from "../config";
 
 interface ValidationResult {
   valid: boolean;
@@ -52,8 +51,8 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
     if (!body.text || typeof body.text !== "string") {
       return { valid: false, error: "Tweet text is required" };
     }
-    if (body.text.length > MAX_TWEET_TEXT_LENGTH) {
-      return { valid: false, error: `Tweet text exceeds max length of ${MAX_TWEET_TEXT_LENGTH} characters` };
+    if (body.text.length > config.maxTweetTextLength) {
+      return { valid: false, error: `Tweet text exceeds max length of ${config.maxTweetTextLength} characters` };
     }
   }
 

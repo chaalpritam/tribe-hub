@@ -139,40 +139,83 @@ async function processSocialEvent(eventData: string, txSignature: string): Promi
 
 // --- Main listener ---
 
+const RECONNECT_DELAY_MS = 5_000;
+const MAX_RECONNECT_DELAY_MS = 60_000;
+
+const programHandlers = [
+  { id: new PublicKey(config.programIds.tidRegistry), handler: processTidEvent },
+  { id: new PublicKey(config.programIds.socialGraph), handler: processSocialEvent },
+];
+
 /**
  * Subscribe to Solana program logs via WebSocket.
  * Parses Anchor events and processes TID + social graph updates.
+ * Automatically reconnects with exponential backoff on disconnect.
  */
 export function startSolanaListener(): void {
-  const connection = new Connection(config.solanaRpcUrl, {
-    wsEndpoint: config.solanaWsUrl,
-  });
+  let reconnectDelay = RECONNECT_DELAY_MS;
 
-  const programHandlers = [
-    { id: new PublicKey(config.programIds.tidRegistry), handler: processTidEvent },
-    { id: new PublicKey(config.programIds.socialGraph), handler: processSocialEvent },
-  ];
+  function subscribe(): void {
+    const connection = new Connection(config.solanaRpcUrl, {
+      wsEndpoint: config.solanaWsUrl,
+    });
 
-  for (const { id, handler } of programHandlers) {
-    connection.onLogs(
-      id,
-      (logs: Logs) => {
-        if (logs.err) return;
+    const subscriptionIds: number[] = [];
 
-        for (const log of logs.logs) {
-          if (log.startsWith(ANCHOR_EVENT_PREFIX)) {
-            const eventData = log.slice(ANCHOR_EVENT_PREFIX.length);
-            try {
-              handler(eventData, logs.signature);
-            } catch (err) {
-              console.error(`Error processing event from ${id.toBase58()}:`, err);
+    for (const { id, handler } of programHandlers) {
+      const subId = connection.onLogs(
+        id,
+        (logs: Logs) => {
+          if (logs.err) return;
+
+          for (const log of logs.logs) {
+            if (log.startsWith(ANCHOR_EVENT_PREFIX)) {
+              const eventData = log.slice(ANCHOR_EVENT_PREFIX.length);
+              try {
+                handler(eventData, logs.signature);
+              } catch (err) {
+                console.error(`Error processing event from ${id.toBase58()}:`, err);
+              }
             }
           }
-        }
-      },
-      "confirmed"
-    );
+        },
+        "confirmed"
+      );
 
-    console.log(`Subscribed to Solana logs for ${id.toBase58()}`);
+      subscriptionIds.push(subId);
+      console.log(`Subscribed to Solana logs for ${id.toBase58()}`);
+    }
+
+    // Reset delay on successful connection
+    reconnectDelay = RECONNECT_DELAY_MS;
+
+    // Monitor the WebSocket connection health
+    // @ts-expect-error accessing internal _rpcWebSocket for reconnection
+    const ws = connection._rpcWebSocket?._ws;
+    if (ws) {
+      ws.on("close", () => {
+        console.warn(`Solana WebSocket disconnected. Reconnecting in ${reconnectDelay / 1000}s...`);
+        scheduleReconnect();
+      });
+      ws.on("error", (err: Error) => {
+        console.error("Solana WebSocket error:", err.message);
+      });
+    }
   }
+
+  function scheduleReconnect(): void {
+    setTimeout(() => {
+      console.log("Reconnecting Solana listener...");
+      try {
+        subscribe();
+      } catch (err) {
+        console.error("Failed to reconnect Solana listener:", err);
+        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+        scheduleReconnect();
+      }
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+  }
+
+  subscribe();
 }

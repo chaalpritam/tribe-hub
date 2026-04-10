@@ -11,6 +11,13 @@ export const config = {
   // Gossip settings
   gossipIntervalMs: parseInt(process.env.GOSSIP_INTERVAL_MS || "5000", 10),
   maxSyncBatchSize: parseInt(process.env.MAX_SYNC_BATCH_SIZE || "100", 10),
+  reconnectDelayMs: parseInt(process.env.RECONNECT_DELAY_MS || "10000", 10),
+  pingIntervalMs: parseInt(process.env.PING_INTERVAL_MS || "30000", 10),
+  // Media storage
+  mediaDir: process.env.MEDIA_DIR || "./data/media",
+  // Validation settings
+  maxTweetTextLength: parseInt(process.env.MAX_TWEET_TEXT_LENGTH || "320", 10),
+  appKeyCacheTtlMs: parseInt(process.env.APP_KEY_CACHE_TTL_MS || "60000", 10),
   // Program IDs
   programIds: {
     tidRegistry: process.env.TID_REGISTRY_PROGRAM_ID || "4BSmJmRGQWKgioP9DG2bUuRS9U3V6soRauU7Nv6yGvHD",

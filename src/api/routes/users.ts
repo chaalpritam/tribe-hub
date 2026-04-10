@@ -3,6 +3,9 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { db } from "../../storage/db";
 import { config } from "../../config";
 
+// Reuse a single connection for backfill requests
+const solanaConnection = new Connection(config.solanaRpcUrl, "confirmed");
+
 /**
  * Read a u64 from a buffer at the given offset (little-endian).
  * Uses manual byte-level operations for browser compatibility.
@@ -31,7 +34,7 @@ function tidToBuffer(tid: number): Buffer {
  */
 async function backfillTid(tid: string): Promise<boolean> {
   try {
-    const connection = new Connection(config.solanaRpcUrl, "confirmed");
+    const connection = solanaConnection;
     const programId = new PublicKey(config.programIds.tidRegistry);
     const tidNum = parseInt(tid, 10);
 

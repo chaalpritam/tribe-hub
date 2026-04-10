@@ -10,7 +10,7 @@ interface CachedAppKey {
   cachedAt: number;
 }
 
-const TTL_MS = 60_000; // 60 second cache TTL
+const MAX_CACHE_SIZE = 10_000; // Max entries to prevent unbounded memory growth
 
 // Anchor account layout for AppKeyRecord after 8-byte discriminator:
 // u64 tid (8) + Pubkey app_pubkey (32) + u8 scope (1) + i64 created_at (8) + i64 expires_at (8) + bool revoked (1) + u8 bump (1)
@@ -41,13 +41,19 @@ class AppKeyCache {
     const cached = this.cache.get(key);
 
     // Return from cache if fresh.
-    if (cached && Date.now() - cached.cachedAt < TTL_MS) {
+    if (cached && Date.now() - cached.cachedAt < config.appKeyCacheTtlMs) {
       return !cached.revoked && (cached.expiresAt === 0 || cached.expiresAt > Date.now() / 1000);
     }
 
     // Cache miss -- fetch from Solana.
     const record = await this.fetchFromChain(tid, signerHex);
     if (!record) return false;
+
+    // Evict oldest entries if cache is full
+    if (this.cache.size >= MAX_CACHE_SIZE) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) this.cache.delete(firstKey);
+    }
 
     this.cache.set(key, { ...record, cachedAt: Date.now() });
     return !record.revoked && (record.expiresAt === 0 || record.expiresAt > Date.now() / 1000);
