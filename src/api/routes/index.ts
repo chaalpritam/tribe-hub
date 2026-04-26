@@ -10,6 +10,7 @@ import { dmRoutes } from "./dms";
 import { channelRoutes } from "./channels";
 import { bookmarkRoutes } from "./bookmarks";
 import { pollRoutes } from "./polls";
+import { eventRoutes } from "./events";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -23,4 +24,5 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(channelRoutes);
   server.register(bookmarkRoutes);
   server.register(pollRoutes);
+  server.register(eventRoutes);
 }

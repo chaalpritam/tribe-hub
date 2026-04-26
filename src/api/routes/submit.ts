@@ -18,8 +18,12 @@ const BOOKMARK_ADD = 14;
 const BOOKMARK_REMOVE = 15;
 const POLL_ADD = 16;
 const POLL_VOTE = 17;
+const EVENT_ADD = 18;
+const EVENT_RSVP = 19;
 
 const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
+const EVENT_ID_RE = /^[a-z0-9-]{1,64}$/;
+const RSVP_STATUS = new Set(["yes", "no", "maybe"]);
 
 const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
 
@@ -308,6 +312,93 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             v.poll_id,
             message.data.tid,
             v.option_index,
+            message.hash,
+            message.signature,
+            message.signer,
+            new Date(message.data.timestamp * 1000),
+          ]
+        );
+        break;
+      }
+
+      case EVENT_ADD: {
+        const ev = body as {
+          event_id?: string;
+          title?: string;
+          description?: string;
+          starts_at?: number;
+          ends_at?: number;
+          location_text?: string;
+          latitude?: number;
+          longitude?: number;
+          channel_id?: string;
+          image_url?: string;
+        };
+        if (!ev.event_id || !ev.title || !ev.starts_at) {
+          return reply.status(400).send({
+            error: "event_id, title, starts_at required",
+          });
+        }
+        if (!EVENT_ID_RE.test(ev.event_id)) {
+          return reply.status(400).send({
+            error: "event_id must match /^[a-z0-9-]{1,64}$/",
+          });
+        }
+        await db.query(
+          `INSERT INTO events
+             (id, creator_tid, title, description, starts_at, ends_at,
+              location_text, latitude, longitude, channel_id, image_url,
+              hash, signature, signer)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            ev.event_id,
+            message.data.tid,
+            ev.title,
+            ev.description ?? null,
+            new Date(ev.starts_at * 1000),
+            ev.ends_at ? new Date(ev.ends_at * 1000) : null,
+            ev.location_text ?? null,
+            ev.latitude ?? null,
+            ev.longitude ?? null,
+            ev.channel_id ?? null,
+            ev.image_url ?? null,
+            message.hash,
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case EVENT_RSVP: {
+        const r = body as { event_id?: string; status?: string };
+        if (!r.event_id || !r.status || !RSVP_STATUS.has(r.status)) {
+          return reply.status(400).send({
+            error: "event_id and status (yes|no|maybe) required",
+          });
+        }
+        const exists = await db.query(
+          `SELECT 1 FROM events WHERE id = $1`,
+          [r.event_id]
+        );
+        if (exists.rows.length === 0) {
+          return reply.status(400).send({ error: "Unknown event" });
+        }
+        await db.query(
+          `INSERT INTO event_rsvps
+             (event_id, tid, status, hash, signature, signer, rsvped_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (event_id, tid) DO UPDATE
+             SET status    = EXCLUDED.status,
+                 hash      = EXCLUDED.hash,
+                 signature = EXCLUDED.signature,
+                 signer    = EXCLUDED.signer,
+                 rsvped_at = EXCLUDED.rsvped_at`,
+          [
+            r.event_id,
+            message.data.tid,
+            r.status,
             message.hash,
             message.signature,
             message.signer,
