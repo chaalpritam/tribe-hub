@@ -11,6 +11,11 @@ const TWEET_REMOVE = 2;
 const REACTION_ADD = 3;
 const REACTION_REMOVE = 4;
 const USER_DATA_ADD = 7;
+const CHANNEL_ADD = 9;
+const CHANNEL_JOIN = 10;
+const CHANNEL_LEAVE = 11;
+
+const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
 
 const ALLOWED_USER_DATA_FIELDS = new Set([
   "bio",
@@ -148,6 +153,67 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             message.signer,
           ]
         );
+        break;
+      }
+
+      case CHANNEL_ADD: {
+        const ch = body as {
+          channel_id?: string;
+          name?: string;
+          description?: string;
+        };
+        if (!ch.channel_id || !ch.name) {
+          return reply
+            .status(400)
+            .send({ error: "channel_id and name required for CHANNEL_ADD" });
+        }
+        if (!CHANNEL_ID_RE.test(ch.channel_id)) {
+          return reply.status(400).send({
+            error: "channel_id must match /^[a-z0-9-]{1,64}$/",
+          });
+        }
+        await db.query(
+          `INSERT INTO channels (id, name, description, created_by, hash, signature, signer)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            ch.channel_id,
+            ch.name,
+            ch.description ?? null,
+            message.data.tid,
+            message.hash,
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case CHANNEL_JOIN:
+      case CHANNEL_LEAVE: {
+        const ch = body as { channel_id?: string };
+        if (!ch.channel_id) {
+          return reply
+            .status(400)
+            .send({ error: "channel_id required" });
+        }
+        const ts = new Date(message.data.timestamp * 1000);
+        if (messageType === CHANNEL_JOIN) {
+          await db.query(
+            `INSERT INTO channel_memberships (channel_id, tid, joined_at, left_at)
+             VALUES ($1, $2, $3, NULL)
+             ON CONFLICT (channel_id, tid)
+               DO UPDATE SET joined_at = EXCLUDED.joined_at, left_at = NULL`,
+            [ch.channel_id, message.data.tid, ts]
+          );
+        } else {
+          await db.query(
+            `UPDATE channel_memberships
+             SET left_at = $3
+             WHERE channel_id = $1 AND tid = $2`,
+            [ch.channel_id, message.data.tid, ts]
+          );
+        }
         break;
       }
 

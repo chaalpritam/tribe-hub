@@ -115,23 +115,6 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     return { tweets: result.rows };
   });
 
-  // List all channels
-  server.get<{
-    Querystring: { limit?: string };
-  }>("/v1/channels", async (request) => {
-    const limit = Math.min(parseInt(request.query.limit || "50", 10), 100);
-    const result = await db.query(
-      `SELECT channel_id, COUNT(*)::int AS message_count, MAX(timestamp) AS last_message_at
-       FROM messages
-       WHERE channel_id IS NOT NULL AND type = 1
-       GROUP BY channel_id
-       ORDER BY last_message_at DESC
-       LIMIT $1`,
-      [limit]
-    );
-    return { channels: result.rows };
-  });
-
   // Replies to a message
   server.get<{
     Querystring: { hash: string; limit?: string };

@@ -14,7 +14,12 @@ db.on("error", (err) => {
 
 export async function runMigrations(): Promise<void> {
   const migrationsDir = join(__dirname, "migrations");
-  const files = ["001_hub.sql", "002_dms.sql", "003_user_data.sql"];
+  const files = [
+    "001_hub.sql",
+    "002_dms.sql",
+    "003_user_data.sql",
+    "004_channels.sql",
+  ];
   for (const file of files) {
     try {
       const sql = readFileSync(join(migrationsDir, file), "utf-8");

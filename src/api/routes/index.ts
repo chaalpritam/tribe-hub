@@ -7,6 +7,7 @@ import { peerRoutes } from "./peers";
 import { healthRoutes } from "./health";
 import { uploadRoutes } from "./upload";
 import { dmRoutes } from "./dms";
+import { channelRoutes } from "./channels";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -17,4 +18,5 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(healthRoutes);
   server.register(uploadRoutes);
   server.register(dmRoutes);
+  server.register(channelRoutes);
 }
