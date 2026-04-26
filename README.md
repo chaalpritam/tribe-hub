@@ -50,7 +50,11 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 |--------|------|-------------|
 | GET / POST | `/v1/polls` | List or create polls; vote |
 | GET / POST | `/v1/events` | List or create events; RSVP |
-| GET / POST | `/v1/tasks` | List or create tasks; claim/complete |
+| GET / POST | `/v1/tasks` | List or create tasks (off-chain envelopes); claim/complete |
+| GET | `/v1/tasks/onchain` | List on-chain tasks (filter by status / creator_tid) |
+| GET | `/v1/tasks/onchain/:pda` | Single task by PDA |
+| GET | `/v1/tasks/onchain/creator/:tid` | Tasks created by a TID |
+| GET | `/v1/tasks/onchain/claimer/:tid` | Tasks claimed by a TID |
 | GET / POST | `/v1/crowdfunds` | List or create crowdfunds (off-chain envelopes); pledge |
 | GET | `/v1/crowdfunds/onchain` | List on-chain campaigns (filter by status / creator_tid) |
 | GET | `/v1/crowdfunds/onchain/:pda` | Single campaign by PDA |
@@ -156,6 +160,7 @@ src/
       013_channel_kinds.sql   # channels.kind / latitude / longitude + seed "general"
       014_onchain_tips.sql    # onchain_tip_records — mirror of tip-registry's TipRecord PDAs
       015_onchain_crowdfunds.sql # onchain_crowdfunds + onchain_crowdfund_pledges — crowdfund-registry mirror
+      016_onchain_tasks.sql   # onchain_tasks — task-registry mirror with state-machine status
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -196,6 +201,7 @@ pnpm dev                # http://localhost:4000
 | `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
 | `TIP_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `tip-registry` program ID |
 | `CROWDFUND_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `crowdfund-registry` program ID |
+| `TASK_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `task-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup

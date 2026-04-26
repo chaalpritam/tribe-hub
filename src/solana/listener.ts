@@ -37,6 +37,19 @@ const CROWDFUND_DISCRIMINATORS = {
   crowdfundRefunded: eventDiscriminator("CrowdfundRefunded"),
 };
 
+// Note: task-registry's CreatorStateInitialized has the same name —
+// and therefore the same discriminator — as crowdfund-registry's.
+// That's fine because the listener routes by program ID before
+// discriminator matching; each handler only sees its own program's
+// logs and there's no cross-program collision.
+const TASK_DISCRIMINATORS = {
+  creatorStateInitialized: eventDiscriminator("CreatorStateInitialized"),
+  taskCreated: eventDiscriminator("TaskCreated"),
+  taskClaimed: eventDiscriminator("TaskClaimed"),
+  taskCompleted: eventDiscriminator("TaskCompleted"),
+  taskCancelled: eventDiscriminator("TaskCancelled"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -360,6 +373,104 @@ async function processCrowdfundEvent(
   }
 }
 
+// --- Task event processor ---
+
+async function processTaskEvent(
+  eventData: string,
+  txSignature: string
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(TASK_DISCRIMINATORS.taskCreated)) {
+    // task(32) | creator(32) | creator_tid(8) | task_id(8) | reward_amount(8)
+    const task = readPubkey(data, 0);
+    const creator = readPubkey(data, 32);
+    const creatorTid = readU64LE(data, 64);
+    const taskId = readU64LE(data, 72);
+    const rewardAmount = readU64LE(data, 80);
+
+    await db.query(
+      `INSERT INTO onchain_tasks (
+         pda, creator, creator_tid, task_id, status,
+         reward_amount, create_tx_signature
+       ) VALUES ($1, $2, $3, $4, 0, $5, $6)
+       ON CONFLICT (pda) DO NOTHING`,
+      [
+        task,
+        creator,
+        creatorTid.toString(),
+        taskId.toString(),
+        rewardAmount.toString(),
+        txSignature,
+      ]
+    );
+    console.log(
+      `TaskCreated: pda=${task} creator_tid=${creatorTid} reward=${rewardAmount} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(TASK_DISCRIMINATORS.taskClaimed)) {
+    // task(32) | claimer(32) | claimer_tid(8)
+    const task = readPubkey(data, 0);
+    const claimer = readPubkey(data, 32);
+    const claimerTid = readU64LE(data, 64);
+
+    // Only flip from Open (0) → Claimed (1). Re-delivery is a no-op
+    // because status will already be 1.
+    await db.query(
+      `UPDATE onchain_tasks
+       SET status = 1, claimer = $2, claimer_tid = $3,
+           claimed_at = NOW(), claim_tx_signature = $4, updated_at = NOW()
+       WHERE pda = $1 AND status = 0`,
+      [task, claimer, claimerTid.toString(), txSignature]
+    );
+    console.log(
+      `TaskClaimed: pda=${task} claimer_tid=${claimerTid} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(TASK_DISCRIMINATORS.taskCompleted)) {
+    // task(32) | creator(32) | claimer(32) | reward_amount(8)
+    const task = readPubkey(data, 0);
+    const rewardAmount = readU64LE(data, 96);
+
+    // Only flip from Claimed (1) → Completed (2).
+    await db.query(
+      `UPDATE onchain_tasks
+       SET status = 2, completed_at = NOW(),
+           complete_tx_signature = $2, updated_at = NOW()
+       WHERE pda = $1 AND status = 1`,
+      [task, txSignature]
+    );
+    console.log(
+      `TaskCompleted: pda=${task} reward=${rewardAmount} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(TASK_DISCRIMINATORS.taskCancelled)) {
+    // task(32) | creator(32) | refunded(8)
+    const task = readPubkey(data, 0);
+    const refunded = readU64LE(data, 64);
+
+    // Only flip from Open (0) → Cancelled (3); the program rejects
+    // cancel after claim, so we mirror that defensively.
+    await db.query(
+      `UPDATE onchain_tasks
+       SET status = 3, cancel_tx_signature = $2, updated_at = NOW()
+       WHERE pda = $1 AND status = 0`,
+      [task, txSignature]
+    );
+    console.log(
+      `TaskCancelled: pda=${task} refunded=${refunded} tx=${txSignature}`
+    );
+  } else if (
+    discriminator.equals(TASK_DISCRIMINATORS.creatorStateInitialized)
+  ) {
+    // No persistent state — counter PDA is a chain-side detail.
+    console.log(`Task CreatorStateInitialized: tx=${txSignature}`);
+  } else {
+    console.warn(
+      `Unknown task event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -370,6 +481,7 @@ const programHandlers = [
   { id: new PublicKey(config.programIds.socialGraph), handler: processSocialEvent },
   { id: new PublicKey(config.programIds.tipRegistry), handler: processTipEvent },
   { id: new PublicKey(config.programIds.crowdfundRegistry), handler: processCrowdfundEvent },
+  { id: new PublicKey(config.programIds.taskRegistry), handler: processTaskEvent },
 ];
 
 /**
