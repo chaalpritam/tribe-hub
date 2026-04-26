@@ -25,6 +25,7 @@ const TASK_CLAIM = 21;
 const TASK_COMPLETE = 22;
 const CROWDFUND_ADD = 23;
 const CROWDFUND_PLEDGE = 24;
+const TIP_ADD = 25;
 
 const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
 const EVENT_ID_RE = /^[a-z0-9-]{1,64}$/;
@@ -584,6 +585,59 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             message.data.tid,
             p.amount,
             p.currency ?? "USD",
+            message.signature,
+            message.signer,
+            new Date(message.data.timestamp * 1000),
+          ]
+        );
+        break;
+      }
+
+      case TIP_ADD: {
+        const t = body as {
+          recipient_tid?: number | string;
+          target_hash?: string;
+          amount?: number;
+          currency?: string;
+          tx_signature?: string;
+        };
+        const recipient =
+          typeof t.recipient_tid === "string"
+            ? parseInt(t.recipient_tid, 10)
+            : t.recipient_tid;
+        if (
+          !recipient ||
+          Number.isNaN(recipient) ||
+          typeof t.amount !== "number" ||
+          t.amount <= 0
+        ) {
+          return reply.status(400).send({
+            error: "recipient_tid and positive amount required",
+          });
+        }
+        const sender =
+          typeof message.data.tid === "string"
+            ? parseInt(message.data.tid, 10)
+            : message.data.tid;
+        if (sender === recipient) {
+          return reply
+            .status(400)
+            .send({ error: "Cannot tip yourself" });
+        }
+        await db.query(
+          `INSERT INTO tips
+             (hash, sender_tid, recipient_tid, target_hash, amount, currency,
+              tx_signature, signature, signer, sent_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (hash) DO NOTHING`,
+          [
+            message.hash,
+            sender,
+            recipient,
+            t.target_hash ?? null,
+            t.amount,
+            t.currency ?? "USD",
+            t.tx_signature ?? null,
             message.signature,
             message.signer,
             new Date(message.data.timestamp * 1000),

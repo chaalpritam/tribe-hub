@@ -13,6 +13,7 @@ import { pollRoutes } from "./polls";
 import { eventRoutes } from "./events";
 import { taskRoutes } from "./tasks";
 import { crowdfundRoutes } from "./crowdfunds";
+import { tipRoutes } from "./tips";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -29,4 +30,5 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(eventRoutes);
   server.register(taskRoutes);
   server.register(crowdfundRoutes);
+  server.register(tipRoutes);
 }
