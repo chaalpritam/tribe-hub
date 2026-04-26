@@ -15,6 +15,7 @@ import { taskRoutes } from "./tasks";
 import { crowdfundRoutes } from "./crowdfunds";
 import { tipRoutes } from "./tips";
 import { karmaRoutes } from "./karma";
+import { notificationRoutes } from "./notifications";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -33,4 +34,5 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(crowdfundRoutes);
   server.register(tipRoutes);
   server.register(karmaRoutes);
+  server.register(notificationRoutes);
 }
