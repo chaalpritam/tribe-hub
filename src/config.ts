@@ -29,5 +29,6 @@ export const config = {
     channelRegistry: process.env.CHANNEL_REGISTRY_PROGRAM_ID || "ChanReg111111111111111111111111111111111111",
     karmaRegistry: process.env.KARMA_REGISTRY_PROGRAM_ID || "KarmaReg11111111111111111111111111111111111",
     pollRegistry: process.env.POLL_REGISTRY_PROGRAM_ID || "HPd8FqxVfoeBxwBr7wuKDeahgGX1V9UewxEWzjZY2SAm",
+    eventRegistry: process.env.EVENT_REGISTRY_PROGRAM_ID || "D2Gt2qkNAa8gZAmvqt3PWH39ydBL1cpwuXqeogkCoPRk",
   },
 };

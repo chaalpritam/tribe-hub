@@ -71,6 +71,14 @@ const POLL_DISCRIMINATORS = {
   pollVoted: eventDiscriminator("PollVoted"),
 };
 
+const EVENT_DISCRIMINATORS = {
+  // Same CreatorStateInitialized collision as above. Same handling.
+  creatorStateInitialized: eventDiscriminator("CreatorStateInitialized"),
+  eventCreated: eventDiscriminator("EventCreated"),
+  eventRsvped: eventDiscriminator("EventRsvped"),
+  eventRsvpUpdated: eventDiscriminator("EventRsvpUpdated"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -705,6 +713,92 @@ async function processPollEvent(
   }
 }
 
+// --- Event event processor ---
+
+async function processEventEvent(
+  eventData: string,
+  txSignature: string
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(EVENT_DISCRIMINATORS.eventCreated)) {
+    // event(32) | creator(32) | creator_tid(8) | event_id(8) | starts_at(8 i64)
+    const eventPda = readPubkey(data, 0);
+    const creator = readPubkey(data, 32);
+    const creatorTid = readU64LE(data, 64);
+    const eventId = readU64LE(data, 72);
+    const startsAtSec = data.readBigInt64LE(80);
+    const startsAtDate = new Date(Number(startsAtSec) * 1000);
+
+    await db.query(
+      `INSERT INTO onchain_events (
+         pda, creator, creator_tid, event_id, starts_at, create_tx_signature
+       ) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (pda) DO NOTHING`,
+      [
+        eventPda,
+        creator,
+        creatorTid.toString(),
+        eventId.toString(),
+        startsAtDate,
+        txSignature,
+      ]
+    );
+    console.log(
+      `EventCreated: pda=${eventPda} creator_tid=${creatorTid} starts_at=${startsAtSec} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(EVENT_DISCRIMINATORS.eventRsvped)) {
+    // event(32) | attendee(32) | attendee_tid(8) | status(1)
+    const eventPda = readPubkey(data, 0);
+    const attendee = readPubkey(data, 32);
+    const attendeeTid = readU64LE(data, 64);
+    const status = data[72];
+
+    await db.query(
+      `INSERT INTO onchain_event_rsvps (
+         event, attendee, attendee_tid, status, tx_signature
+       ) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (event, attendee) DO NOTHING`,
+      [eventPda, attendee, attendeeTid.toString(), status, txSignature]
+    );
+    console.log(
+      `EventRsvped: event=${eventPda} attendee_tid=${attendeeTid} status=${status} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(EVENT_DISCRIMINATORS.eventRsvpUpdated)) {
+    // event(32) | attendee(32) | previous_status(1) | new_status(1)
+    const eventPda = readPubkey(data, 0);
+    const attendee = readPubkey(data, 32);
+    const newStatus = data[65];
+
+    // Idempotent: WHERE status <> $3 means re-delivery is a no-op.
+    // If we somehow missed the original Rsvped event, this UPDATE
+    // matches no rows and we log a warning so backfill can fix it.
+    const result = await db.query(
+      `UPDATE onchain_event_rsvps
+       SET status = $3, updated_at = NOW(), tx_signature = $4
+       WHERE event = $1 AND attendee = $2 AND status <> $3`,
+      [eventPda, attendee, newStatus, txSignature]
+    );
+    if (result.rowCount === 0) {
+      console.warn(
+        `EventRsvpUpdated had no matching row (idempotent or missing original): event=${eventPda} tx=${txSignature}`
+      );
+    } else {
+      console.log(
+        `EventRsvpUpdated: event=${eventPda} new_status=${newStatus} tx=${txSignature}`
+      );
+    }
+  } else if (discriminator.equals(EVENT_DISCRIMINATORS.creatorStateInitialized)) {
+    console.log(`Event CreatorStateInitialized: tx=${txSignature}`);
+  } else {
+    console.warn(
+      `Unknown event-registry discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -719,6 +813,7 @@ const programHandlers = [
   { id: new PublicKey(config.programIds.channelRegistry), handler: processChannelEvent },
   { id: new PublicKey(config.programIds.karmaRegistry), handler: processKarmaEvent },
   { id: new PublicKey(config.programIds.pollRegistry), handler: processPollEvent },
+  { id: new PublicKey(config.programIds.eventRegistry), handler: processEventEvent },
 ];
 
 /**

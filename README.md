@@ -55,7 +55,11 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | GET | `/v1/polls/onchain/creator/:tid` | Polls created by a TID |
 | GET | `/v1/polls/onchain/voter/:tid` | Votes a TID has cast on chain |
 | GET | `/v1/polls/onchain/:pda/votes` | All votes on a specific poll |
-| GET / POST | `/v1/events` | List or create events; RSVP |
+| GET / POST | `/v1/events` | List or create events (off-chain envelopes); RSVP |
+| GET | `/v1/events/onchain/:pda` | Single event with yes/no/maybe counts |
+| GET | `/v1/events/onchain/creator/:tid` | Events created by a TID |
+| GET | `/v1/events/onchain/attendee/:tid` | Events a TID has RSVPed to |
+| GET | `/v1/events/onchain/:pda/rsvps` | All RSVPs on a specific event (filter by status) |
 | GET / POST | `/v1/tasks` | List or create tasks (off-chain envelopes); claim/complete |
 | GET | `/v1/tasks/onchain` | List on-chain tasks (filter by status / creator_tid) |
 | GET | `/v1/tasks/onchain/:pda` | Single task by PDA |
@@ -179,6 +183,7 @@ src/
       017_onchain_channels.sql # onchain_channels — channel-registry ownership anchor
       018_onchain_karma.sql   # onchain_karma + onchain_karma_proofs — karma-registry mirror
       019_onchain_polls.sql   # onchain_polls + onchain_poll_votes — poll-registry mirror
+      020_onchain_events.sql  # onchain_events + onchain_event_rsvps — event-registry mirror
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -223,6 +228,7 @@ pnpm dev                # http://localhost:4000
 | `CHANNEL_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `channel-registry` program ID |
 | `KARMA_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `karma-registry` program ID |
 | `POLL_REGISTRY_PROGRAM_ID` | (real keypair default) | Override `poll-registry` program ID |
+| `EVENT_REGISTRY_PROGRAM_ID` | (real keypair default) | Override `event-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup
