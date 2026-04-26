@@ -16,6 +16,10 @@ const CHANNEL_JOIN = 10;
 const CHANNEL_LEAVE = 11;
 const BOOKMARK_ADD = 14;
 const BOOKMARK_REMOVE = 15;
+const POLL_ADD = 16;
+const POLL_VOTE = 17;
+
+const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
 
 const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
 
@@ -216,6 +220,100 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             [ch.channel_id, message.data.tid, ts]
           );
         }
+        break;
+      }
+
+      case POLL_ADD: {
+        const p = body as {
+          poll_id?: string;
+          question?: string;
+          options?: string[];
+          expires_at?: number; // unix seconds
+          channel_id?: string;
+        };
+        if (
+          !p.poll_id ||
+          !p.question ||
+          !Array.isArray(p.options) ||
+          p.options.length < 2 ||
+          p.options.length > 10
+        ) {
+          return reply.status(400).send({
+            error: "poll_id, question, and 2-10 options required",
+          });
+        }
+        if (!POLL_ID_RE.test(p.poll_id)) {
+          return reply
+            .status(400)
+            .send({ error: "poll_id must match /^[a-z0-9-]{1,64}$/" });
+        }
+        await db.query(
+          `INSERT INTO polls
+             (id, creator_tid, question, options, expires_at, channel_id,
+              hash, signature, signer)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            p.poll_id,
+            message.data.tid,
+            p.question,
+            p.options,
+            p.expires_at ? new Date(p.expires_at * 1000) : null,
+            p.channel_id ?? null,
+            message.hash,
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case POLL_VOTE: {
+        const v = body as { poll_id?: string; option_index?: number };
+        if (
+          !v.poll_id ||
+          typeof v.option_index !== "number" ||
+          v.option_index < 0
+        ) {
+          return reply
+            .status(400)
+            .send({ error: "poll_id and option_index required" });
+        }
+        const pollResult = await db.query(
+          `SELECT array_length(options, 1) AS n, expires_at
+           FROM polls WHERE id = $1`,
+          [v.poll_id]
+        );
+        if (pollResult.rows.length === 0) {
+          return reply.status(400).send({ error: "Unknown poll" });
+        }
+        const { n, expires_at } = pollResult.rows[0];
+        if (v.option_index >= n) {
+          return reply.status(400).send({ error: "option_index out of range" });
+        }
+        if (expires_at && new Date(expires_at) < new Date()) {
+          return reply.status(400).send({ error: "Poll has expired" });
+        }
+        await db.query(
+          `INSERT INTO poll_votes
+             (poll_id, voter_tid, option_index, hash, signature, signer, voted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (poll_id, voter_tid) DO UPDATE
+             SET option_index = EXCLUDED.option_index,
+                 hash         = EXCLUDED.hash,
+                 signature    = EXCLUDED.signature,
+                 signer       = EXCLUDED.signer,
+                 voted_at     = EXCLUDED.voted_at`,
+          [
+            v.poll_id,
+            message.data.tid,
+            v.option_index,
+            message.hash,
+            message.signature,
+            message.signer,
+            new Date(message.data.timestamp * 1000),
+          ]
+        );
         break;
       }
 
