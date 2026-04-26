@@ -14,6 +14,8 @@ const USER_DATA_ADD = 7;
 const CHANNEL_ADD = 9;
 const CHANNEL_JOIN = 10;
 const CHANNEL_LEAVE = 11;
+const BOOKMARK_ADD = 14;
+const BOOKMARK_REMOVE = 15;
 
 const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
 
@@ -212,6 +214,43 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
              SET left_at = $3
              WHERE channel_id = $1 AND tid = $2`,
             [ch.channel_id, message.data.tid, ts]
+          );
+        }
+        break;
+      }
+
+      case BOOKMARK_ADD:
+      case BOOKMARK_REMOVE: {
+        const bm = body as { target_hash?: string };
+        if (!bm.target_hash) {
+          return reply
+            .status(400)
+            .send({ error: "target_hash required for bookmark op" });
+        }
+        const ts = new Date(message.data.timestamp * 1000);
+        if (messageType === BOOKMARK_ADD) {
+          await db.query(
+            `INSERT INTO bookmarks
+               (tid, target_hash, bookmarked_at, envelope_hash, signature, signer)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (tid, target_hash) DO UPDATE
+               SET bookmarked_at = EXCLUDED.bookmarked_at,
+                   envelope_hash = EXCLUDED.envelope_hash,
+                   signature     = EXCLUDED.signature,
+                   signer        = EXCLUDED.signer`,
+            [
+              message.data.tid,
+              bm.target_hash,
+              ts,
+              message.hash,
+              message.signature,
+              message.signer,
+            ]
+          );
+        } else {
+          await db.query(
+            `DELETE FROM bookmarks WHERE tid = $1 AND target_hash = $2`,
+            [message.data.tid, bm.target_hash]
           );
         }
         break;

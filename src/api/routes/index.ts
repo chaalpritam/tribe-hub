@@ -8,6 +8,7 @@ import { healthRoutes } from "./health";
 import { uploadRoutes } from "./upload";
 import { dmRoutes } from "./dms";
 import { channelRoutes } from "./channels";
+import { bookmarkRoutes } from "./bookmarks";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -19,4 +20,5 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(uploadRoutes);
   server.register(dmRoutes);
   server.register(channelRoutes);
+  server.register(bookmarkRoutes);
 }
