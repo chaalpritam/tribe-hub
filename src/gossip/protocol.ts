@@ -18,6 +18,9 @@ import {
   storeGossipMessage,
   storeGossipDm,
   storeGossipDmKey,
+  getDmHashes,
+  getDmsByHashes,
+  findMissingDmHashes,
   getLastSyncTime,
   updateSyncState,
   incrementPeerMessageCount,
@@ -208,6 +211,19 @@ async function handlePeerMessage(
           payload: { hashes, since: lastSync.toISOString() } as HavePayload,
         });
       }
+
+      // Same idea for DMs.
+      const dmHashes = await getDmHashes(lastSync, config.maxSyncBatchSize);
+      if (dmHashes.length > 0) {
+        send(ws, {
+          type: "dm_have",
+          hubId: config.hubId,
+          payload: {
+            hashes: dmHashes,
+            since: lastSync.toISOString(),
+          } as HavePayload,
+        });
+      }
       break;
     }
 
@@ -283,6 +299,34 @@ async function handlePeerMessage(
         await incrementPeerMessageCount(msg.hubId, stored);
       }
       // Don't re-gossip — same loop-prevention rule as tweets.
+      break;
+    }
+
+    case "dm_have": {
+      const payload = msg.payload as HavePayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
+      const missing = await findMissingDmHashes(payload.hashes);
+      if (missing.length > 0) {
+        send(ws, {
+          type: "dm_want",
+          hubId: config.hubId,
+          payload: { hashes: missing } as WantPayload,
+        });
+      }
+      break;
+    }
+
+    case "dm_want": {
+      const payload = msg.payload as WantPayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
+      const messages = await getDmsByHashes(payload.hashes);
+      if (messages.length > 0) {
+        send(ws, {
+          type: "dm_messages",
+          hubId: config.hubId,
+          payload: { messages } as DmMessagesPayload,
+        });
+      }
       break;
     }
 

@@ -264,3 +264,67 @@ export async function storeGossipDmKey(
     [tid, x25519Pubkey]
   );
 }
+
+/** Recent DM hashes for catch-up gossip. */
+export async function getDmHashes(
+  since: Date,
+  limit: number
+): Promise<string[]> {
+  const result = await db.query(
+    `SELECT hash FROM dm_messages
+     WHERE created_at > $1
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [since, limit]
+  );
+  return result.rows.map((r: { hash: string }) => r.hash);
+}
+
+/** Subset of input hashes that we don't yet have in dm_messages. */
+export async function findMissingDmHashes(
+  hashes: string[]
+): Promise<string[]> {
+  if (hashes.length === 0) return [];
+  const result = await db.query(
+    `SELECT hash FROM dm_messages WHERE hash = ANY($1)`,
+    [hashes]
+  );
+  const existing = new Set(result.rows.map((r: { hash: string }) => r.hash));
+  return hashes.filter((h) => !existing.has(h));
+}
+
+/** Pull DMs by hash for sending in a dm_messages envelope. */
+export async function getDmsByHashes(hashes: string[]): Promise<GossipDm[]> {
+  if (hashes.length === 0) return [];
+  const result = await db.query(
+    `SELECT hash, conversation_id, sender_tid, recipient_tid,
+            ciphertext, nonce, sender_x25519, timestamp, signature, signer
+     FROM dm_messages
+     WHERE hash = ANY($1)`,
+    [hashes]
+  );
+  return result.rows.map((r: {
+    hash: string;
+    conversation_id: string;
+    sender_tid: string;
+    recipient_tid: string;
+    ciphertext: string;
+    nonce: string;
+    sender_x25519: string;
+    timestamp: Date | string;
+    signature: string;
+    signer: string;
+  }) => ({
+    hash: r.hash,
+    conversationId: r.conversation_id,
+    senderTid: r.sender_tid.toString(),
+    recipientTid: r.recipient_tid.toString(),
+    ciphertext: r.ciphertext,
+    nonce: r.nonce,
+    senderX25519: r.sender_x25519,
+    timestamp:
+      r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
+    signature: r.signature,
+    signer: r.signer,
+  }));
+}

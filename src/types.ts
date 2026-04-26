@@ -49,6 +49,8 @@ export interface GossipEnvelope {
     | "want"
     | "messages"
     | "dm_messages"
+    | "dm_have"
+    | "dm_want"
     | "dm_key"
     | "ping"
     | "pong";
