@@ -24,6 +24,11 @@ const SOCIAL_DISCRIMINATORS = {
   unfollowed: eventDiscriminator("Unfollowed"),
 };
 
+const TIP_DISCRIMINATORS = {
+  senderStateInitialized: eventDiscriminator("SenderTipStateInitialized"),
+  tipSent: eventDiscriminator("TipSent"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -137,6 +142,83 @@ async function processSocialEvent(eventData: string, txSignature: string): Promi
   }
 }
 
+// --- Tip event processor ---
+
+/** Derive the TipRecord PDA seed exactly like tip-registry does:
+ * `["tip", sender_pubkey, tip_id_le]`. We compute it locally so we
+ * can persist the canonical PDA address without re-querying the
+ * chain on every event. */
+function deriveTipRecordPda(
+  programId: PublicKey,
+  sender: PublicKey,
+  tipId: bigint
+): string {
+  const idBuf = Buffer.alloc(8);
+  idBuf.writeBigUInt64LE(tipId);
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("tip"), sender.toBuffer(), idBuf],
+    programId
+  );
+  return pda.toBase58();
+}
+
+async function processTipEvent(eventData: string, txSignature: string): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(TIP_DISCRIMINATORS.tipSent)) {
+    // TipSent layout (after 8-byte event disc):
+    //   sender(32) | recipient(32) | sender_tid(8) | recipient_tid(8)
+    //   | amount(8) | tip_id(8) | has_target(1) | target_hash(32)
+    const sender = readPubkey(data, 0);
+    const recipient = readPubkey(data, 32);
+    const senderTid = readU64LE(data, 64);
+    const recipientTid = readU64LE(data, 72);
+    const amount = readU64LE(data, 80);
+    const tipId = readU64LE(data, 88);
+    const hasTarget = data[96] === 1;
+    const targetHashBuf = data.subarray(97, 129);
+    const targetHash = hasTarget ? targetHashBuf.toString("base64") : null;
+
+    const programId = new PublicKey(config.programIds.tipRegistry);
+    const senderKey = new PublicKey(sender);
+    const pda = deriveTipRecordPda(programId, senderKey, tipId);
+
+    await db.query(
+      `INSERT INTO onchain_tip_records (
+         pda, sender, recipient, sender_tid, recipient_tid,
+         amount, tip_id, target_hash, has_target, tx_signature
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (pda) DO NOTHING`,
+      [
+        pda,
+        sender,
+        recipient,
+        senderTid.toString(),
+        recipientTid.toString(),
+        amount.toString(),
+        tipId.toString(),
+        targetHash,
+        hasTarget,
+        txSignature,
+      ]
+    );
+    console.log(
+      `TipSent: ${senderTid} -> ${recipientTid} amount=${amount} tip_id=${tipId} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(TIP_DISCRIMINATORS.senderStateInitialized)) {
+    // No persistent state to track — counter PDA is a chain-side
+    // implementation detail. Just log for visibility.
+    const senderTid = readU64LE(data, 32);
+    console.log(`SenderTipStateInitialized: tid=${senderTid} tx=${txSignature}`);
+  } else {
+    console.warn(
+      `Unknown tip event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -145,6 +227,7 @@ const MAX_RECONNECT_DELAY_MS = 60_000;
 const programHandlers = [
   { id: new PublicKey(config.programIds.tidRegistry), handler: processTidEvent },
   { id: new PublicKey(config.programIds.socialGraph), handler: processSocialEvent },
+  { id: new PublicKey(config.programIds.tipRegistry), handler: processTipEvent },
 ];
 
 /**

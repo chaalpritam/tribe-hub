@@ -65,4 +65,76 @@ export async function tipRoutes(server: FastifyInstance): Promise<void> {
       total_amount: totalsResult.rows[0].total_amount,
     };
   });
+
+  // ── On-chain mirror: TipRecord PDAs from tip-registry ──────────────
+
+  // Tips a TID has sent on chain.
+  server.get<{
+    Params: { tid: string };
+    Querystring: { limit?: string };
+  }>("/v1/tips/onchain/sent/:tid", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
+    const result = await db.query(
+      `SELECT pda, sender, recipient, sender_tid, recipient_tid,
+              amount, tip_id, target_hash, has_target,
+              tx_signature, created_at
+       FROM onchain_tip_records
+       WHERE sender_tid = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [request.params.tid, limit]
+    );
+    return { tips: result.rows };
+  });
+
+  // Tips a TID has received on chain.
+  server.get<{
+    Params: { tid: string };
+    Querystring: { limit?: string };
+  }>("/v1/tips/onchain/received/:tid", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
+    const result = await db.query(
+      `SELECT pda, sender, recipient, sender_tid, recipient_tid,
+              amount, tip_id, target_hash, has_target,
+              tx_signature, created_at
+       FROM onchain_tip_records
+       WHERE recipient_tid = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [request.params.tid, limit]
+    );
+    return { tips: result.rows };
+  });
+
+  // On-chain tips against a particular target. `target_hash` here is
+  // the base64 of the 32-byte content hash that was packed into the
+  // TipSent event — same encoding the off-chain TIP_ADD envelope uses
+  // for `target_hash`, so the two are directly comparable.
+  server.get<{
+    Params: { hash: string };
+    Querystring: { limit?: string };
+  }>("/v1/tips/onchain/target/:hash", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
+    const result = await db.query(
+      `SELECT pda, sender, recipient, sender_tid, recipient_tid,
+              amount, tip_id, tx_signature, created_at
+       FROM onchain_tip_records
+       WHERE target_hash = $1 AND has_target = TRUE
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [request.params.hash, limit]
+    );
+    const totalsResult = await db.query(
+      `SELECT COUNT(*)::int AS tip_count,
+              COALESCE(SUM(amount), 0)::bigint AS total_lamports
+       FROM onchain_tip_records
+       WHERE target_hash = $1 AND has_target = TRUE`,
+      [request.params.hash]
+    );
+    return {
+      tips: result.rows,
+      tip_count: totalsResult.rows[0].tip_count,
+      total_lamports: totalsResult.rows[0].total_lamports,
+    };
+  });
 }

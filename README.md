@@ -52,7 +52,10 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | GET / POST | `/v1/events` | List or create events; RSVP |
 | GET / POST | `/v1/tasks` | List or create tasks; claim/complete |
 | GET / POST | `/v1/crowdfunds` | List or create crowdfunds; pledge |
-| GET / POST | `/v1/tips` | Send and query tips |
+| GET / POST | `/v1/tips` | Send and query tips (off-chain envelopes) |
+| GET | `/v1/tips/onchain/sent/:tid` | TipRecord PDAs the TID sent on chain |
+| GET | `/v1/tips/onchain/received/:tid` | TipRecord PDAs the TID received on chain |
+| GET | `/v1/tips/onchain/target/:hash` | On-chain tips for a content hash + total lamports |
 | GET | `/v1/notifications/:tid` | Per-TID notification feed |
 
 ### Network & Media
@@ -147,6 +150,7 @@ src/
       011_group_dms.sql       # group_dms, group_dm_members, group_dm_messages
       012_dm_read.sql         # dm_read_receipts
       013_channel_kinds.sql   # channels.kind / latitude / longitude + seed "general"
+      014_onchain_tips.sql    # onchain_tip_records — mirror of tip-registry's TipRecord PDAs
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -185,6 +189,7 @@ pnpm dev                # http://localhost:4000
 | `TID_REGISTRY_PROGRAM_ID` | (devnet default) | Override `tid-registry` program ID |
 | `APP_KEY_REGISTRY_PROGRAM_ID` | (devnet default) | Override `app-key-registry` program ID |
 | `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
+| `TIP_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `tip-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup
