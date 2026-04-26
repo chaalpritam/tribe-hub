@@ -7,9 +7,31 @@ import { gossipDm, gossipDmKey } from "../../gossip/protocol";
 
 const DM_KEY_REGISTER = 12;
 const DM_SEND = 13;
+const DM_GROUP_CREATE = 26;
+const DM_GROUP_SEND = 27;
+
+const GROUP_ID_RE = /^[a-z0-9-]{1,64}$/;
 
 interface DmKeyRegisterBody {
   x25519_pubkey: string;
+}
+
+interface DmGroupCreateBody {
+  group_id: string;
+  name: string;
+  member_tids: string[]; // includes the creator
+}
+
+interface PerRecipientCipher {
+  recipient_tid: string;
+  ciphertext: string;
+  nonce: string;
+}
+
+interface DmGroupSendBody {
+  group_id: string;
+  sender_x25519: string;
+  ciphertexts: PerRecipientCipher[];
 }
 
 interface DmSendBody {
@@ -283,5 +305,233 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
     );
 
     return { messages: messagesResult.rows.reverse() };
+  });
+
+  // ── Group DMs ────────────────────────────────────────────────────
+
+  // Create a group + add the initial member set.
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/groups/create",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_GROUP_CREATE) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_GROUP_CREATE envelope" });
+      }
+      const validation = await verifyEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as DmGroupCreateBody;
+      if (
+        !body?.group_id ||
+        !body?.name ||
+        !Array.isArray(body.member_tids) ||
+        body.member_tids.length < 2
+      ) {
+        return reply.status(400).send({
+          error: "group_id, name, and >=2 member_tids required",
+        });
+      }
+      if (!GROUP_ID_RE.test(body.group_id)) {
+        return reply.status(400).send({
+          error: "group_id must match /^[a-z0-9-]{1,64}$/",
+        });
+      }
+
+      await db.query(
+        `INSERT INTO dm_groups (id, name, creator_tid, hash, signature, signer)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          body.group_id,
+          body.name,
+          message.data.tid,
+          message.hash,
+          message.signature,
+          message.signer,
+        ]
+      );
+
+      // Members are appended; re-creating the same group keeps any
+      // existing membership intact (idempotent).
+      const memberRows = body.member_tids.map((tid) => `(${
+        body.group_id ? `'${body.group_id.replace(/'/g, "''")}'` : "NULL"
+      }, ${parseInt(String(tid), 10)})`);
+      if (memberRows.length > 0) {
+        await db.query(
+          `INSERT INTO dm_group_members (group_id, tid)
+           VALUES ${memberRows.join(", ")}
+           ON CONFLICT (group_id, tid) DO NOTHING`
+        );
+      }
+
+      return { group_id: body.group_id };
+    }
+  );
+
+  // Send a group message — sender includes per-recipient ciphertext.
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/groups/send",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_GROUP_SEND) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_GROUP_SEND envelope" });
+      }
+      const validation = await verifyEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as DmGroupSendBody;
+      if (
+        !body?.group_id ||
+        !body?.sender_x25519 ||
+        !Array.isArray(body.ciphertexts) ||
+        body.ciphertexts.length === 0
+      ) {
+        return reply.status(400).send({
+          error: "group_id, sender_x25519, ciphertexts required",
+        });
+      }
+
+      // Sender must be a member of the group.
+      const memberCheck = await db.query(
+        `SELECT 1 FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
+        [body.group_id, message.data.tid]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply
+          .status(403)
+          .send({ error: "Sender is not a member of this group" });
+      }
+
+      const sentAt = new Date(message.data.timestamp * 1000);
+
+      const dup = await db.query(
+        `SELECT 1 FROM dm_group_messages WHERE hash = $1`,
+        [message.hash]
+      );
+      if (dup.rowCount && dup.rowCount > 0) {
+        return reply.status(409).send({ error: "Duplicate message hash" });
+      }
+
+      await db.query(
+        `INSERT INTO dm_group_messages
+           (hash, group_id, sender_tid, sender_x25519, timestamp, signature, signer)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          message.hash,
+          body.group_id,
+          message.data.tid,
+          body.sender_x25519,
+          sentAt,
+          message.signature,
+          message.signer,
+        ]
+      );
+
+      // Insert one row per recipient ciphertext.
+      const values: string[] = [];
+      const params: unknown[] = [];
+      for (const c of body.ciphertexts) {
+        params.push(message.hash, c.recipient_tid, c.ciphertext, c.nonce);
+        const i = params.length;
+        values.push(`($${i - 3}, $${i - 2}, $${i - 1}, $${i})`);
+      }
+      await db.query(
+        `INSERT INTO dm_group_ciphertexts
+           (envelope_hash, recipient_tid, ciphertext, nonce)
+         VALUES ${values.join(", ")}
+         ON CONFLICT (envelope_hash, recipient_tid) DO NOTHING`,
+        params
+      );
+
+      return { hash: message.hash, group_id: body.group_id };
+    }
+  );
+
+  // List groups a TID belongs to.
+  server.get<{ Params: { tid: string } }>(
+    "/v1/dm/groups/member/:tid",
+    async (request) => {
+      const result = await db.query(
+        `SELECT g.id, g.name, g.creator_tid, g.created_at,
+                m.joined_at,
+                (SELECT COUNT(*) FROM dm_group_members
+                   WHERE group_id = g.id) AS member_count
+         FROM dm_group_members m
+         JOIN dm_groups g ON g.id = m.group_id
+         WHERE m.tid = $1
+         ORDER BY g.created_at DESC`,
+        [request.params.tid]
+      );
+      return { groups: result.rows };
+    }
+  );
+
+  // Get a single group's metadata + members.
+  server.get<{ Params: { groupId: string } }>(
+    "/v1/dm/groups/:groupId",
+    async (request, reply) => {
+      const groupResult = await db.query(
+        `SELECT id, name, creator_tid, created_at FROM dm_groups WHERE id = $1`,
+        [request.params.groupId]
+      );
+      if (groupResult.rows.length === 0) {
+        return reply.status(404).send({ error: "Group not found" });
+      }
+      const memberResult = await db.query(
+        `SELECT tid, joined_at FROM dm_group_members
+         WHERE group_id = $1
+         ORDER BY joined_at`,
+        [request.params.groupId]
+      );
+      return { ...groupResult.rows[0], members: memberResult.rows };
+    }
+  );
+
+  // Fetch a recipient's per-message ciphertext for a group.
+  server.get<{
+    Params: { groupId: string };
+    Querystring: { tid?: string; limit?: string };
+  }>("/v1/dm/groups/:groupId/messages", async (request, reply) => {
+    const tid = parseInt(request.query.tid || "", 10);
+    if (!tid || Number.isNaN(tid)) {
+      return reply
+        .status(400)
+        .send({ error: "tid query parameter is required" });
+    }
+    const limit = Math.min(
+      parseInt(request.query.limit || "50", 10) || 50,
+      200
+    );
+
+    const memberCheck = await db.query(
+      `SELECT 1 FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
+      [request.params.groupId, tid]
+    );
+    if (memberCheck.rows.length === 0) {
+      return reply
+        .status(403)
+        .send({ error: "Not a member of this group" });
+    }
+
+    const result = await db.query(
+      `SELECT m.hash, m.sender_tid, m.sender_x25519, m.timestamp,
+              c.ciphertext, c.nonce
+       FROM dm_group_messages m
+       JOIN dm_group_ciphertexts c
+         ON c.envelope_hash = m.hash AND c.recipient_tid = $2
+       WHERE m.group_id = $1
+       ORDER BY m.timestamp DESC
+       LIMIT $3`,
+      [request.params.groupId, tid, limit]
+    );
+    return { messages: result.rows.reverse() };
   });
 }
