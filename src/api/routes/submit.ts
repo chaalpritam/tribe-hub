@@ -23,10 +23,13 @@ const EVENT_RSVP = 19;
 const TASK_ADD = 20;
 const TASK_CLAIM = 21;
 const TASK_COMPLETE = 22;
+const CROWDFUND_ADD = 23;
+const CROWDFUND_PLEDGE = 24;
 
 const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
 const EVENT_ID_RE = /^[a-z0-9-]{1,64}$/;
 const TASK_ID_RE = /^[a-z0-9-]{1,64}$/;
+const CROWDFUND_ID_RE = /^[a-z0-9-]{1,64}$/;
 const RSVP_STATUS = new Set(["yes", "no", "maybe"]);
 
 const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
@@ -494,6 +497,98 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             error: "Task not claimed by you or not in 'claimed' state",
           });
         }
+        break;
+      }
+
+      case CROWDFUND_ADD: {
+        const c = body as {
+          crowdfund_id?: string;
+          title?: string;
+          description?: string;
+          goal_amount?: number;
+          currency?: string;
+          deadline_at?: number;
+          image_url?: string;
+          channel_id?: string;
+        };
+        if (
+          !c.crowdfund_id ||
+          !c.title ||
+          typeof c.goal_amount !== "number" ||
+          c.goal_amount <= 0
+        ) {
+          return reply.status(400).send({
+            error: "crowdfund_id, title, and positive goal_amount required",
+          });
+        }
+        if (!CROWDFUND_ID_RE.test(c.crowdfund_id)) {
+          return reply.status(400).send({
+            error: "crowdfund_id must match /^[a-z0-9-]{1,64}$/",
+          });
+        }
+        await db.query(
+          `INSERT INTO crowdfunds
+             (id, creator_tid, title, description, goal_amount, currency,
+              deadline_at, image_url, channel_id, hash, signature, signer)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            c.crowdfund_id,
+            message.data.tid,
+            c.title,
+            c.description ?? null,
+            c.goal_amount,
+            c.currency ?? "USD",
+            c.deadline_at ? new Date(c.deadline_at * 1000) : null,
+            c.image_url ?? null,
+            c.channel_id ?? null,
+            message.hash,
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case CROWDFUND_PLEDGE: {
+        const p = body as {
+          crowdfund_id?: string;
+          amount?: number;
+          currency?: string;
+        };
+        if (
+          !p.crowdfund_id ||
+          typeof p.amount !== "number" ||
+          p.amount <= 0
+        ) {
+          return reply.status(400).send({
+            error: "crowdfund_id and positive amount required",
+          });
+        }
+        const exists = await db.query(
+          `SELECT 1 FROM crowdfunds WHERE id = $1`,
+          [p.crowdfund_id]
+        );
+        if (exists.rows.length === 0) {
+          return reply.status(400).send({ error: "Unknown crowdfund" });
+        }
+        await db.query(
+          `INSERT INTO crowdfund_pledges
+             (hash, crowdfund_id, pledger_tid, amount, currency,
+              signature, signer, pledged_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (hash) DO NOTHING`,
+          [
+            message.hash,
+            p.crowdfund_id,
+            message.data.tid,
+            p.amount,
+            p.currency ?? "USD",
+            message.signature,
+            message.signer,
+            new Date(message.data.timestamp * 1000),
+          ]
+        );
         break;
       }
 
