@@ -62,6 +62,15 @@ const KARMA_DISCRIMINATORS = {
   taskKarmaRecorded: eventDiscriminator("TaskKarmaRecorded"),
 };
 
+const POLL_DISCRIMINATORS = {
+  // Note: CreatorStateInitialized collides by name with the same
+  // event in crowdfund-registry / task-registry. Per-program log
+  // routing means the collision never matters.
+  creatorStateInitialized: eventDiscriminator("CreatorStateInitialized"),
+  pollCreated: eventDiscriminator("PollCreated"),
+  pollVoted: eventDiscriminator("PollVoted"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -640,6 +649,62 @@ async function processKarmaEvent(
   }
 }
 
+// --- Poll event processor ---
+
+async function processPollEvent(
+  eventData: string,
+  txSignature: string
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(POLL_DISCRIMINATORS.pollCreated)) {
+    // poll(32) | creator(32) | creator_tid(8) | poll_id(8) | option_count(1)
+    const poll = readPubkey(data, 0);
+    const creator = readPubkey(data, 32);
+    const creatorTid = readU64LE(data, 64);
+    const pollId = readU64LE(data, 72);
+    const optionCount = data[80];
+
+    await db.query(
+      `INSERT INTO onchain_polls (
+         pda, creator, creator_tid, poll_id, option_count, create_tx_signature
+       ) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (pda) DO NOTHING`,
+      [poll, creator, creatorTid.toString(), pollId.toString(), optionCount, txSignature]
+    );
+    console.log(
+      `PollCreated: pda=${poll} creator_tid=${creatorTid} options=${optionCount} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(POLL_DISCRIMINATORS.pollVoted)) {
+    // poll(32) | voter(32) | voter_tid(8) | option_index(1) | new_total_for_option(4 u32)
+    const poll = readPubkey(data, 0);
+    const voter = readPubkey(data, 32);
+    const voterTid = readU64LE(data, 64);
+    const optionIndex = data[72];
+
+    // (poll, voter) PK + ON CONFLICT DO NOTHING handles redelivery
+    // and matches the on-chain Vote PDA's init-as-uniqueness guarantee.
+    await db.query(
+      `INSERT INTO onchain_poll_votes (
+         poll, voter, voter_tid, option_index, tx_signature
+       ) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (poll, voter) DO NOTHING`,
+      [poll, voter, voterTid.toString(), optionIndex, txSignature]
+    );
+    console.log(
+      `PollVoted: poll=${poll} voter_tid=${voterTid} option=${optionIndex} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(POLL_DISCRIMINATORS.creatorStateInitialized)) {
+    console.log(`Poll CreatorStateInitialized: tx=${txSignature}`);
+  } else {
+    console.warn(
+      `Unknown poll event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -653,6 +718,7 @@ const programHandlers = [
   { id: new PublicKey(config.programIds.taskRegistry), handler: processTaskEvent },
   { id: new PublicKey(config.programIds.channelRegistry), handler: processChannelEvent },
   { id: new PublicKey(config.programIds.karmaRegistry), handler: processKarmaEvent },
+  { id: new PublicKey(config.programIds.pollRegistry), handler: processPollEvent },
 ];
 
 /**

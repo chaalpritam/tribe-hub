@@ -28,5 +28,6 @@ export const config = {
     taskRegistry: process.env.TASK_REGISTRY_PROGRAM_ID || "TaskReg111111111111111111111111111111111111",
     channelRegistry: process.env.CHANNEL_REGISTRY_PROGRAM_ID || "ChanReg111111111111111111111111111111111111",
     karmaRegistry: process.env.KARMA_REGISTRY_PROGRAM_ID || "KarmaReg11111111111111111111111111111111111",
+    pollRegistry: process.env.POLL_REGISTRY_PROGRAM_ID || "HPd8FqxVfoeBxwBr7wuKDeahgGX1V9UewxEWzjZY2SAm",
   },
 };

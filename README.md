@@ -50,7 +50,11 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 ### Community Primitives
 | Method | Path | Description |
 |--------|------|-------------|
-| GET / POST | `/v1/polls` | List or create polls; vote |
+| GET / POST | `/v1/polls` | List or create polls (off-chain envelopes); vote |
+| GET | `/v1/polls/onchain/:pda` | Single poll with aggregated tallies + total votes |
+| GET | `/v1/polls/onchain/creator/:tid` | Polls created by a TID |
+| GET | `/v1/polls/onchain/voter/:tid` | Votes a TID has cast on chain |
+| GET | `/v1/polls/onchain/:pda/votes` | All votes on a specific poll |
 | GET / POST | `/v1/events` | List or create events; RSVP |
 | GET / POST | `/v1/tasks` | List or create tasks (off-chain envelopes); claim/complete |
 | GET | `/v1/tasks/onchain` | List on-chain tasks (filter by status / creator_tid) |
@@ -174,6 +178,7 @@ src/
       016_onchain_tasks.sql   # onchain_tasks — task-registry mirror with state-machine status
       017_onchain_channels.sql # onchain_channels — channel-registry ownership anchor
       018_onchain_karma.sql   # onchain_karma + onchain_karma_proofs — karma-registry mirror
+      019_onchain_polls.sql   # onchain_polls + onchain_poll_votes — poll-registry mirror
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -217,6 +222,7 @@ pnpm dev                # http://localhost:4000
 | `TASK_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `task-registry` program ID |
 | `CHANNEL_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `channel-registry` program ID |
 | `KARMA_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `karma-registry` program ID |
+| `POLL_REGISTRY_PROGRAM_ID` | (real keypair default) | Override `poll-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup
