@@ -57,4 +57,54 @@ export async function karmaRoutes(server: FastifyInstance): Promise<void> {
       };
     }
   );
+
+  // ── On-chain mirror: KarmaAccount + KarmaProofs from karma-registry ──
+
+  // On-chain karma counters for a TID.
+  server.get<{ Params: { tid: string } }>(
+    "/v1/karma/onchain/:tid",
+    async (request, reply) => {
+      const result = await db.query(
+        `SELECT tid, pda, tips_received_count, tips_received_lamports,
+                tasks_completed_count, tasks_completed_reward_lamports,
+                initialized_at, updated_at
+         FROM onchain_karma
+         WHERE tid = $1`,
+        [request.params.tid]
+      );
+      if (result.rows.length === 0) {
+        return reply.status(404).send({
+          error: "On-chain karma account not initialized for this TID",
+        });
+      }
+      return result.rows[0];
+    }
+  );
+
+  // Audit trail of every credit a TID has received. Filterable by
+  // kind (1=Tip, 2=Task) so callers can render "tipped from" and
+  // "tasks completed" tabs without two round trips.
+  server.get<{
+    Params: { tid: string };
+    Querystring: { kind?: string; limit?: string };
+  }>("/v1/karma/onchain/:tid/proofs", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
+    const params: unknown[] = [request.params.tid];
+    let where = "tid = $1";
+    if (request.query.kind !== undefined) {
+      params.push(parseInt(request.query.kind, 10));
+      where += ` AND kind = $${params.length}`;
+    }
+    params.push(limit);
+    const result = await db.query(
+      `SELECT source, kind, tid, karma_pda, amount,
+              tx_signature, recorded_at
+       FROM onchain_karma_proofs
+       WHERE ${where}
+       ORDER BY recorded_at DESC
+       LIMIT $${params.length}`,
+      params
+    );
+    return { proofs: result.rows };
+  });
 }

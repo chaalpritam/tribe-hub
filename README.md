@@ -31,7 +31,9 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 |--------|------|-------------|
 | GET | `/v1/user/:tid` | User profile |
 | GET | `/v1/users` | All users |
-| GET | `/v1/users/:tid/karma` | Aggregated karma score for a TID |
+| GET | `/v1/users/:tid/karma` | Aggregated karma score for a TID (off-chain) |
+| GET | `/v1/karma/onchain/:tid` | On-chain karma counters from karma-registry |
+| GET | `/v1/karma/onchain/:tid/proofs` | Audit trail of every credit (filter by kind) |
 | GET | `/v1/followers/:tid` | Followers list |
 | GET | `/v1/following/:tid` | Following list |
 
@@ -171,6 +173,7 @@ src/
       015_onchain_crowdfunds.sql # onchain_crowdfunds + onchain_crowdfund_pledges — crowdfund-registry mirror
       016_onchain_tasks.sql   # onchain_tasks — task-registry mirror with state-machine status
       017_onchain_channels.sql # onchain_channels — channel-registry ownership anchor
+      018_onchain_karma.sql   # onchain_karma + onchain_karma_proofs — karma-registry mirror
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -213,6 +216,7 @@ pnpm dev                # http://localhost:4000
 | `CROWDFUND_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `crowdfund-registry` program ID |
 | `TASK_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `task-registry` program ID |
 | `CHANNEL_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `channel-registry` program ID |
+| `KARMA_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `karma-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup

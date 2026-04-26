@@ -56,6 +56,12 @@ const CHANNEL_DISCRIMINATORS = {
   channelTransferred: eventDiscriminator("ChannelTransferred"),
 };
 
+const KARMA_DISCRIMINATORS = {
+  karmaAccountInitialized: eventDiscriminator("KarmaAccountInitialized"),
+  tipKarmaRecorded: eventDiscriminator("TipKarmaRecorded"),
+  taskKarmaRecorded: eventDiscriminator("TaskKarmaRecorded"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -539,6 +545,101 @@ async function processChannelEvent(
   }
 }
 
+// --- Karma event processor ---
+
+async function processKarmaEvent(
+  eventData: string,
+  txSignature: string
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(KARMA_DISCRIMINATORS.karmaAccountInitialized)) {
+    // karma(32) | tid(8)
+    const karma = readPubkey(data, 0);
+    const tid = readU64LE(data, 32);
+
+    await db.query(
+      `INSERT INTO onchain_karma (tid, pda)
+       VALUES ($1, $2)
+       ON CONFLICT (tid) DO NOTHING`,
+      [tid.toString(), karma]
+    );
+    console.log(`KarmaAccountInitialized: tid=${tid} pda=${karma} tx=${txSignature}`);
+  } else if (discriminator.equals(KARMA_DISCRIMINATORS.tipKarmaRecorded)) {
+    // karma(32) | tid(8) | tip_record(32) | amount(8)
+    //   | new_tip_count(8) | new_tip_lamports(8)
+    const karma = readPubkey(data, 0);
+    const tid = readU64LE(data, 32);
+    const tipRecord = readPubkey(data, 40);
+    const amount = readU64LE(data, 72);
+    const newTipCount = readU64LE(data, 80);
+    const newTipLamports = readU64LE(data, 88);
+
+    // Counters in the event are authoritative; redelivery overwrites
+    // with the same values.
+    await db.query(
+      `INSERT INTO onchain_karma (
+         tid, pda, tips_received_count, tips_received_lamports
+       ) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tid) DO UPDATE SET
+         tips_received_count = EXCLUDED.tips_received_count,
+         tips_received_lamports = EXCLUDED.tips_received_lamports,
+         updated_at = NOW()`,
+      [tid.toString(), karma, newTipCount.toString(), newTipLamports.toString()]
+    );
+
+    // Audit row keyed by source. ON CONFLICT DO NOTHING so a
+    // redelivered event doesn't duplicate the proof.
+    await db.query(
+      `INSERT INTO onchain_karma_proofs (
+         source, kind, tid, karma_pda, amount, tx_signature
+       ) VALUES ($1, 1, $2, $3, $4, $5)
+       ON CONFLICT (source) DO NOTHING`,
+      [tipRecord, tid.toString(), karma, amount.toString(), txSignature]
+    );
+    console.log(
+      `TipKarmaRecorded: tid=${tid} amount=${amount} new_count=${newTipCount} new_lamports=${newTipLamports} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(KARMA_DISCRIMINATORS.taskKarmaRecorded)) {
+    // karma(32) | tid(8) | task(32) | reward_amount(8)
+    //   | new_task_count(8) | new_task_reward_lamports(8)
+    const karma = readPubkey(data, 0);
+    const tid = readU64LE(data, 32);
+    const task = readPubkey(data, 40);
+    const rewardAmount = readU64LE(data, 72);
+    const newTaskCount = readU64LE(data, 80);
+    const newTaskRewardLamports = readU64LE(data, 88);
+
+    await db.query(
+      `INSERT INTO onchain_karma (
+         tid, pda, tasks_completed_count, tasks_completed_reward_lamports
+       ) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tid) DO UPDATE SET
+         tasks_completed_count = EXCLUDED.tasks_completed_count,
+         tasks_completed_reward_lamports = EXCLUDED.tasks_completed_reward_lamports,
+         updated_at = NOW()`,
+      [tid.toString(), karma, newTaskCount.toString(), newTaskRewardLamports.toString()]
+    );
+
+    await db.query(
+      `INSERT INTO onchain_karma_proofs (
+         source, kind, tid, karma_pda, amount, tx_signature
+       ) VALUES ($1, 2, $2, $3, $4, $5)
+       ON CONFLICT (source) DO NOTHING`,
+      [task, tid.toString(), karma, rewardAmount.toString(), txSignature]
+    );
+    console.log(
+      `TaskKarmaRecorded: tid=${tid} reward=${rewardAmount} new_count=${newTaskCount} new_lamports=${newTaskRewardLamports} tx=${txSignature}`
+    );
+  } else {
+    console.warn(
+      `Unknown karma event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -551,6 +652,7 @@ const programHandlers = [
   { id: new PublicKey(config.programIds.crowdfundRegistry), handler: processCrowdfundEvent },
   { id: new PublicKey(config.programIds.taskRegistry), handler: processTaskEvent },
   { id: new PublicKey(config.programIds.channelRegistry), handler: processChannelEvent },
+  { id: new PublicKey(config.programIds.karmaRegistry), handler: processKarmaEvent },
 ];
 
 /**
