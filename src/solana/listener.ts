@@ -50,6 +50,12 @@ const TASK_DISCRIMINATORS = {
   taskCancelled: eventDiscriminator("TaskCancelled"),
 };
 
+const CHANNEL_DISCRIMINATORS = {
+  channelRegistered: eventDiscriminator("ChannelRegistered"),
+  channelUpdated: eventDiscriminator("ChannelUpdated"),
+  channelTransferred: eventDiscriminator("ChannelTransferred"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -471,6 +477,68 @@ async function processTaskEvent(
   }
 }
 
+// --- Channel event processor ---
+
+async function processChannelEvent(
+  eventData: string,
+  txSignature: string
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(CHANNEL_DISCRIMINATORS.channelRegistered)) {
+    // channel(32) | owner(32) | owner_tid(8) | kind(1)
+    const channel = readPubkey(data, 0);
+    const owner = readPubkey(data, 32);
+    const ownerTid = readU64LE(data, 64);
+    const kind = data[72];
+
+    await db.query(
+      `INSERT INTO onchain_channels (
+         pda, owner, owner_tid, kind, register_tx_signature
+       ) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (pda) DO NOTHING`,
+      [channel, owner, ownerTid.toString(), kind, txSignature]
+    );
+    console.log(
+      `ChannelRegistered: pda=${channel} owner_tid=${ownerTid} kind=${kind} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(CHANNEL_DISCRIMINATORS.channelUpdated)) {
+    // channel(32) | owner(32)
+    const channel = readPubkey(data, 0);
+    // Update event doesn't carry the new lat/lon/metadata_hash;
+    // those would need an RPC fetch. We just bump updated_at so
+    // callers can see the channel was touched.
+    await db.query(
+      `UPDATE onchain_channels SET updated_at = NOW() WHERE pda = $1`,
+      [channel]
+    );
+    console.log(`ChannelUpdated: pda=${channel} tx=${txSignature}`);
+  } else if (discriminator.equals(CHANNEL_DISCRIMINATORS.channelTransferred)) {
+    // channel(32) | previous_owner(32) | previous_owner_tid(8)
+    //   | new_owner(32) | new_owner_tid(8)
+    const channel = readPubkey(data, 0);
+    const newOwner = readPubkey(data, 72);
+    const newOwnerTid = readU64LE(data, 104);
+
+    await db.query(
+      `UPDATE onchain_channels
+       SET owner = $2, owner_tid = $3,
+           last_transfer_tx = $4, updated_at = NOW()
+       WHERE pda = $1`,
+      [channel, newOwner, newOwnerTid.toString(), txSignature]
+    );
+    console.log(
+      `ChannelTransferred: pda=${channel} new_owner_tid=${newOwnerTid} tx=${txSignature}`
+    );
+  } else {
+    console.warn(
+      `Unknown channel event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -482,6 +550,7 @@ const programHandlers = [
   { id: new PublicKey(config.programIds.tipRegistry), handler: processTipEvent },
   { id: new PublicKey(config.programIds.crowdfundRegistry), handler: processCrowdfundEvent },
   { id: new PublicKey(config.programIds.taskRegistry), handler: processTaskEvent },
+  { id: new PublicKey(config.programIds.channelRegistry), handler: processChannelEvent },
 ];
 
 /**

@@ -91,6 +91,15 @@ Every `TWEET_ADD` must carry a non-empty `channel_id`; the submit route rejects 
 
 The `channels` table exposes `kind`, `latitude`, and `longitude` via `GET /v1/channels`, `GET /v1/channels/:id`, and `GET /v1/channels/member/:tid`.
 
+For globally-unique on-chain ownership, hit:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/channels/onchain` | List on-chain channels (filter by kind / owner_tid) |
+| GET | `/v1/channels/onchain/:pda` | Single channel by PDA |
+| GET | `/v1/channels/onchain/by-id/:id` | Slug-based lookup (derives PDA, joins off-chain metadata) |
+| GET | `/v1/channels/onchain/owner/:tid` | Channels owned by a TID |
+
 ## Gossip Protocol
 
 Pull-based with five frame types: `hello` / `have` / `want` / `messages` / `ping` (+`pong`).
@@ -161,6 +170,7 @@ src/
       014_onchain_tips.sql    # onchain_tip_records — mirror of tip-registry's TipRecord PDAs
       015_onchain_crowdfunds.sql # onchain_crowdfunds + onchain_crowdfund_pledges — crowdfund-registry mirror
       016_onchain_tasks.sql   # onchain_tasks — task-registry mirror with state-machine status
+      017_onchain_channels.sql # onchain_channels — channel-registry ownership anchor
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -202,6 +212,7 @@ pnpm dev                # http://localhost:4000
 | `TIP_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `tip-registry` program ID |
 | `CROWDFUND_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `crowdfund-registry` program ID |
 | `TASK_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `task-registry` program ID |
+| `CHANNEL_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `channel-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup
