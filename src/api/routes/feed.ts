@@ -97,6 +97,94 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     return { tweets: result.rows, query: q };
   });
 
+  // Search users by username (case-insensitive prefix match) or by
+  // recent USER_DATA displayName / bio substring.
+  server.get<{
+    Querystring: { q: string; limit?: string };
+  }>("/v1/search/users", async (request, reply) => {
+    const q = request.query.q;
+    if (!q || q.length < 2) {
+      return reply
+        .status(400)
+        .send({ error: "Query must be at least 2 characters" });
+    }
+    if (q.length > 100) {
+      return reply.status(400).send({ error: "Query too long" });
+    }
+    const limit = Math.min(parseInt(request.query.limit || "20", 10), 50);
+    const result = await db.query(
+      `SELECT DISTINCT t.tid, t.custody_address, t.username,
+              dn.value AS display_name, bio.value AS bio, pfp.value AS pfp_url
+       FROM tids t
+       LEFT JOIN LATERAL (
+         SELECT value FROM user_data
+         WHERE tid = t.tid AND field = 'displayName'
+         ORDER BY timestamp DESC LIMIT 1
+       ) dn ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT value FROM user_data
+         WHERE tid = t.tid AND field = 'bio'
+         ORDER BY timestamp DESC LIMIT 1
+       ) bio ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT value FROM user_data
+         WHERE tid = t.tid AND field = 'pfpUrl'
+         ORDER BY timestamp DESC LIMIT 1
+       ) pfp ON TRUE
+       WHERE
+         t.username ILIKE $1
+         OR dn.value ILIKE $2
+         OR bio.value ILIKE $2
+       ORDER BY
+         CASE WHEN t.username ILIKE $1 THEN 0 ELSE 1 END,
+         t.tid
+       LIMIT $3`,
+      [`${q}%`, `%${q}%`, limit]
+    );
+    return { users: result.rows, query: q };
+  });
+
+  // Search channels by id or name.
+  server.get<{
+    Querystring: { q: string; limit?: string };
+  }>("/v1/search/channels", async (request, reply) => {
+    const q = request.query.q;
+    if (!q || q.length < 2) {
+      return reply
+        .status(400)
+        .send({ error: "Query must be at least 2 characters" });
+    }
+    if (q.length > 100) {
+      return reply.status(400).send({ error: "Query too long" });
+    }
+    const limit = Math.min(parseInt(request.query.limit || "20", 10), 50);
+    const result = await db.query(
+      `WITH activity AS (
+         SELECT channel_id, MAX(timestamp) AS last_tweet_at
+         FROM messages
+         WHERE channel_id IS NOT NULL AND type = 1
+         GROUP BY channel_id
+       )
+       SELECT
+         COALESCE(c.id, a.channel_id) AS id,
+         c.name,
+         c.description,
+         (SELECT COUNT(*) FROM channel_memberships m
+            WHERE m.channel_id = COALESCE(c.id, a.channel_id)
+              AND m.left_at IS NULL) AS member_count,
+         a.last_tweet_at
+       FROM channels c
+       FULL OUTER JOIN activity a ON c.id = a.channel_id
+       WHERE
+         COALESCE(c.id, a.channel_id) ILIKE $1
+         OR c.name ILIKE $1
+       ORDER BY a.last_tweet_at DESC NULLS LAST
+       LIMIT $2`,
+      [`%${q}%`, limit]
+    );
+    return { channels: result.rows, query: q };
+  });
+
   // Channel feed
   server.get<{
     Params: { channelId: string };
