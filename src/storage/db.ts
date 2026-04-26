@@ -22,6 +22,7 @@ export async function runMigrations(): Promise<void> {
     "005_bookmarks.sql",
     "006_polls.sql",
     "007_events.sql",
+    "008_tasks.sql",
   ];
   for (const file of files) {
     try {

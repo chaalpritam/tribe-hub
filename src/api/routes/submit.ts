@@ -20,9 +20,13 @@ const POLL_ADD = 16;
 const POLL_VOTE = 17;
 const EVENT_ADD = 18;
 const EVENT_RSVP = 19;
+const TASK_ADD = 20;
+const TASK_CLAIM = 21;
+const TASK_COMPLETE = 22;
 
 const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
 const EVENT_ID_RE = /^[a-z0-9-]{1,64}$/;
+const TASK_ID_RE = /^[a-z0-9-]{1,64}$/;
 const RSVP_STATUS = new Set(["yes", "no", "maybe"]);
 
 const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
@@ -405,6 +409,91 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             new Date(message.data.timestamp * 1000),
           ]
         );
+        break;
+      }
+
+      case TASK_ADD: {
+        const t = body as {
+          task_id?: string;
+          title?: string;
+          description?: string;
+          reward_text?: string;
+          channel_id?: string;
+        };
+        if (!t.task_id || !t.title) {
+          return reply
+            .status(400)
+            .send({ error: "task_id and title required" });
+        }
+        if (!TASK_ID_RE.test(t.task_id)) {
+          return reply.status(400).send({
+            error: "task_id must match /^[a-z0-9-]{1,64}$/",
+          });
+        }
+        await db.query(
+          `INSERT INTO tasks
+             (id, creator_tid, title, description, reward_text, channel_id,
+              status, hash, signature, signer)
+           VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8, $9)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            t.task_id,
+            message.data.tid,
+            t.title,
+            t.description ?? null,
+            t.reward_text ?? null,
+            t.channel_id ?? null,
+            message.hash,
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case TASK_CLAIM: {
+        const t = body as { task_id?: string };
+        if (!t.task_id) {
+          return reply.status(400).send({ error: "task_id required" });
+        }
+        const ts = new Date(message.data.timestamp * 1000);
+        const result = await db.query(
+          `UPDATE tasks
+           SET status = 'claimed',
+               claimed_by_tid = $2,
+               claimed_at = $3
+           WHERE id = $1 AND status = 'open'`,
+          [t.task_id, message.data.tid, ts]
+        );
+        if ((result.rowCount ?? 0) === 0) {
+          return reply
+            .status(400)
+            .send({ error: "Task not found or not open" });
+        }
+        break;
+      }
+
+      case TASK_COMPLETE: {
+        const t = body as { task_id?: string };
+        if (!t.task_id) {
+          return reply.status(400).send({ error: "task_id required" });
+        }
+        const ts = new Date(message.data.timestamp * 1000);
+        const result = await db.query(
+          `UPDATE tasks
+           SET status = 'completed',
+               completed_by_tid = $2,
+               completed_at = $3
+           WHERE id = $1
+             AND status = 'claimed'
+             AND (claimed_by_tid = $2 OR creator_tid = $2)`,
+          [t.task_id, message.data.tid, ts]
+        );
+        if ((result.rowCount ?? 0) === 0) {
+          return reply.status(400).send({
+            error: "Task not claimed by you or not in 'claimed' state",
+          });
+        }
         break;
       }
 

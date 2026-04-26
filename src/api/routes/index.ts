@@ -11,6 +11,7 @@ import { channelRoutes } from "./channels";
 import { bookmarkRoutes } from "./bookmarks";
 import { pollRoutes } from "./polls";
 import { eventRoutes } from "./events";
+import { taskRoutes } from "./tasks";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -25,4 +26,5 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(bookmarkRoutes);
   server.register(pollRoutes);
   server.register(eventRoutes);
+  server.register(taskRoutes);
 }
