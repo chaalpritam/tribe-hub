@@ -9,6 +9,7 @@ const DM_KEY_REGISTER = 12;
 const DM_SEND = 13;
 const DM_GROUP_CREATE = 26;
 const DM_GROUP_SEND = 27;
+const DM_READ = 28;
 
 const GROUP_ID_RE = /^[a-z0-9-]{1,64}$/;
 
@@ -534,4 +535,71 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
     );
     return { messages: result.rows.reverse() };
   });
+
+  // ── Read receipts ───────────────────────────────────────────────
+
+  // Mark progress through a conversation.
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/read",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_READ) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_READ envelope" });
+      }
+      const validation = await verifyEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as {
+        conversation_id?: string;
+        last_read_hash?: string;
+      };
+      if (!body?.conversation_id || !body?.last_read_hash) {
+        return reply.status(400).send({
+          error: "conversation_id and last_read_hash required",
+        });
+      }
+      const ts = new Date(message.data.timestamp * 1000);
+      await db.query(
+        `INSERT INTO dm_read_receipts
+           (tid, conversation_id, last_read_hash, last_read_at,
+            signature, signer)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (tid, conversation_id) DO UPDATE
+           SET last_read_hash = EXCLUDED.last_read_hash,
+               last_read_at   = EXCLUDED.last_read_at,
+               signature      = EXCLUDED.signature,
+               signer         = EXCLUDED.signer
+           WHERE dm_read_receipts.last_read_at < EXCLUDED.last_read_at`,
+        [
+          message.data.tid,
+          body.conversation_id,
+          body.last_read_hash,
+          ts,
+          message.signature,
+          message.signer,
+        ]
+      );
+      return { ok: true };
+    }
+  );
+
+  // All read receipts in a conversation (so participants can render
+  // each other's last-read marker).
+  server.get<{ Params: { conversationId: string } }>(
+    "/v1/dm/conversations/:conversationId/reads",
+    async (request) => {
+      const result = await db.query(
+        `SELECT tid, last_read_hash, last_read_at
+         FROM dm_read_receipts
+         WHERE conversation_id = $1
+         ORDER BY last_read_at DESC`,
+        [request.params.conversationId]
+      );
+      return { reads: result.rows };
+    }
+  );
 }

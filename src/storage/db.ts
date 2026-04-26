@@ -26,6 +26,7 @@ export async function runMigrations(): Promise<void> {
     "009_crowdfunds.sql",
     "010_tips.sql",
     "011_group_dms.sql",
+    "012_dm_read_receipts.sql",
   ];
   for (const file of files) {
     try {
