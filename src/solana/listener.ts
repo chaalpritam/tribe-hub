@@ -29,6 +29,14 @@ const TIP_DISCRIMINATORS = {
   tipSent: eventDiscriminator("TipSent"),
 };
 
+const CROWDFUND_DISCRIMINATORS = {
+  creatorStateInitialized: eventDiscriminator("CreatorStateInitialized"),
+  crowdfundCreated: eventDiscriminator("CrowdfundCreated"),
+  crowdfundPledged: eventDiscriminator("CrowdfundPledged"),
+  crowdfundClaimed: eventDiscriminator("CrowdfundClaimed"),
+  crowdfundRefunded: eventDiscriminator("CrowdfundRefunded"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -219,6 +227,139 @@ async function processTipEvent(eventData: string, txSignature: string): Promise<
   }
 }
 
+// --- Crowdfund event processor ---
+
+async function processCrowdfundEvent(
+  eventData: string,
+  txSignature: string
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(CROWDFUND_DISCRIMINATORS.crowdfundCreated)) {
+    // crowdfund(32) | creator(32) | creator_tid(8) | crowdfund_id(8)
+    //   | goal_amount(8) | deadline_at(8 i64)
+    const crowdfund = readPubkey(data, 0);
+    const creator = readPubkey(data, 32);
+    const creatorTid = readU64LE(data, 64);
+    const crowdfundId = readU64LE(data, 72);
+    const goalAmount = readU64LE(data, 80);
+    const deadlineAt = data.readBigInt64LE(88);
+    const deadlineDate = new Date(Number(deadlineAt) * 1000);
+
+    await db.query(
+      `INSERT INTO onchain_crowdfunds (
+         pda, creator, creator_tid, crowdfund_id, goal_amount,
+         deadline_at, status, create_tx_signature
+       ) VALUES ($1, $2, $3, $4, $5, $6, 0, $7)
+       ON CONFLICT (pda) DO NOTHING`,
+      [
+        crowdfund,
+        creator,
+        creatorTid.toString(),
+        crowdfundId.toString(),
+        goalAmount.toString(),
+        deadlineDate,
+        txSignature,
+      ]
+    );
+    console.log(
+      `CrowdfundCreated: pda=${crowdfund} creator_tid=${creatorTid} goal=${goalAmount} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(CROWDFUND_DISCRIMINATORS.crowdfundPledged)) {
+    // crowdfund(32) | backer(32) | backer_tid(8) | amount(8)
+    //   | total_pledged(8) | pledge_count(4 u32)
+    const crowdfund = readPubkey(data, 0);
+    const backer = readPubkey(data, 32);
+    const backerTid = readU64LE(data, 64);
+    const amount = readU64LE(data, 72);
+    const totalPledged = readU64LE(data, 80);
+    const pledgeCount = data.readUInt32LE(88);
+
+    // Per-backer accumulator. The WHERE clause makes the upsert
+    // idempotent across log redelivery: same tx_signature seen twice
+    // = no second increment.
+    await db.query(
+      `INSERT INTO onchain_crowdfund_pledges (
+         crowdfund, backer, backer_tid, amount, last_pledge_tx
+       ) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (crowdfund, backer) DO UPDATE SET
+         amount = onchain_crowdfund_pledges.amount + EXCLUDED.amount,
+         last_pledge_tx = EXCLUDED.last_pledge_tx,
+         updated_at = NOW()
+       WHERE onchain_crowdfund_pledges.last_pledge_tx
+             IS DISTINCT FROM EXCLUDED.last_pledge_tx`,
+      [crowdfund, backer, backerTid.toString(), amount.toString(), txSignature]
+    );
+
+    // Campaign-level aggregates are authoritative in the event
+    // payload, so a redelivered Pledged log just overwrites with the
+    // same values — no double-count risk here.
+    await db.query(
+      `UPDATE onchain_crowdfunds
+       SET total_pledged = $2, pledge_count = $3, updated_at = NOW()
+       WHERE pda = $1`,
+      [crowdfund, totalPledged.toString(), pledgeCount]
+    );
+    console.log(
+      `CrowdfundPledged: pda=${crowdfund} backer_tid=${backerTid} amount=${amount} total=${totalPledged} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(CROWDFUND_DISCRIMINATORS.crowdfundClaimed)) {
+    // crowdfund(32) | creator(32) | total_pledged(8)
+    const crowdfund = readPubkey(data, 0);
+    const totalPledged = readU64LE(data, 64);
+
+    await db.query(
+      `UPDATE onchain_crowdfunds
+       SET status = 1, total_pledged = 0, claim_tx_signature = $2, updated_at = NOW()
+       WHERE pda = $1 AND status <> 1`,
+      [crowdfund, txSignature]
+    );
+    console.log(
+      `CrowdfundClaimed: pda=${crowdfund} swept=${totalPledged} tx=${txSignature}`
+    );
+  } else if (discriminator.equals(CROWDFUND_DISCRIMINATORS.crowdfundRefunded)) {
+    // crowdfund(32) | backer(32) | amount(8)
+    const crowdfund = readPubkey(data, 0);
+    const backer = readPubkey(data, 32);
+    const amount = readU64LE(data, 64);
+
+    // The on-chain Pledge PDA is closed on refund; mirror by deleting
+    // the row. Idempotent against redelivery (DELETE on missing row
+    // is a no-op).
+    await db.query(
+      `DELETE FROM onchain_crowdfund_pledges
+       WHERE crowdfund = $1 AND backer = $2`,
+      [crowdfund, backer]
+    );
+
+    // Decrement campaign aggregates. saturating_sub at the SQL layer:
+    // never go negative even if events arrive out of order.
+    await db.query(
+      `UPDATE onchain_crowdfunds
+       SET total_pledged = GREATEST(total_pledged - $2, 0),
+           pledge_count = GREATEST(pledge_count - 1, 0),
+           status = CASE WHEN status = 0 THEN 2 ELSE status END,
+           updated_at = NOW()
+       WHERE pda = $1`,
+      [crowdfund, amount.toString()]
+    );
+    console.log(
+      `CrowdfundRefunded: pda=${crowdfund} backer=${backer} amount=${amount} tx=${txSignature}`
+    );
+  } else if (
+    discriminator.equals(CROWDFUND_DISCRIMINATORS.creatorStateInitialized)
+  ) {
+    // No persistent state — counter PDA is a chain-side detail.
+    console.log(`Crowdfund CreatorStateInitialized: tx=${txSignature}`);
+  } else {
+    console.warn(
+      `Unknown crowdfund event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -228,6 +369,7 @@ const programHandlers = [
   { id: new PublicKey(config.programIds.tidRegistry), handler: processTidEvent },
   { id: new PublicKey(config.programIds.socialGraph), handler: processSocialEvent },
   { id: new PublicKey(config.programIds.tipRegistry), handler: processTipEvent },
+  { id: new PublicKey(config.programIds.crowdfundRegistry), handler: processCrowdfundEvent },
 ];
 
 /**

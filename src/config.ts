@@ -24,5 +24,6 @@ export const config = {
     appKeyRegistry: process.env.APP_KEY_REGISTRY_PROGRAM_ID || "5LtbFUeAoXWRovGpyWnRJhiCS62XsTYKVErT9kPpv4hN",
     socialGraph: process.env.SOCIAL_GRAPH_PROGRAM_ID || "8kKnWvbmTjWq5uPePk79RRbQMAXCszNFzHdRwUS4N74w",
     tipRegistry: process.env.TIP_REGISTRY_PROGRAM_ID || "TipReg1111111111111111111111111111111111111",
+    crowdfundRegistry: process.env.CROWDFUND_REGISTRY_PROGRAM_ID || "CrowdF11111111111111111111111111111111111111",
   },
 };

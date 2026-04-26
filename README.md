@@ -51,7 +51,11 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | GET / POST | `/v1/polls` | List or create polls; vote |
 | GET / POST | `/v1/events` | List or create events; RSVP |
 | GET / POST | `/v1/tasks` | List or create tasks; claim/complete |
-| GET / POST | `/v1/crowdfunds` | List or create crowdfunds; pledge |
+| GET / POST | `/v1/crowdfunds` | List or create crowdfunds (off-chain envelopes); pledge |
+| GET | `/v1/crowdfunds/onchain` | List on-chain campaigns (filter by status / creator_tid) |
+| GET | `/v1/crowdfunds/onchain/:pda` | Single campaign by PDA |
+| GET | `/v1/crowdfunds/onchain/:pda/pledges` | Pledges on a campaign |
+| GET | `/v1/crowdfunds/onchain/backer/:tid` | A TID's pledges across campaigns |
 | GET / POST | `/v1/tips` | Send and query tips (off-chain envelopes) |
 | GET | `/v1/tips/onchain/sent/:tid` | TipRecord PDAs the TID sent on chain |
 | GET | `/v1/tips/onchain/received/:tid` | TipRecord PDAs the TID received on chain |
@@ -151,6 +155,7 @@ src/
       012_dm_read.sql         # dm_read_receipts
       013_channel_kinds.sql   # channels.kind / latitude / longitude + seed "general"
       014_onchain_tips.sql    # onchain_tip_records — mirror of tip-registry's TipRecord PDAs
+      015_onchain_crowdfunds.sql # onchain_crowdfunds + onchain_crowdfund_pledges — crowdfund-registry mirror
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -190,6 +195,7 @@ pnpm dev                # http://localhost:4000
 | `APP_KEY_REGISTRY_PROGRAM_ID` | (devnet default) | Override `app-key-registry` program ID |
 | `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
 | `TIP_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `tip-registry` program ID |
+| `CROWDFUND_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `crowdfund-registry` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup
