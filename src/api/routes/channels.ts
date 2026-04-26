@@ -21,6 +21,9 @@ export async function channelRoutes(server: FastifyInstance): Promise<void> {
          COALESCE(c.id, a.channel_id) AS id,
          c.name,
          c.description,
+         c.kind,
+         c.latitude,
+         c.longitude,
          c.created_by,
          c.created_at,
          COALESCE(a.tweet_count, 0) AS tweet_count,
@@ -42,7 +45,8 @@ export async function channelRoutes(server: FastifyInstance): Promise<void> {
     "/v1/channels/:id",
     async (request, reply) => {
       const result = await db.query(
-        `SELECT c.id, c.name, c.description, c.created_by, c.created_at,
+        `SELECT c.id, c.name, c.description, c.kind, c.latitude, c.longitude,
+                c.created_by, c.created_at,
                 (SELECT COUNT(*) FROM channel_memberships m
                    WHERE m.channel_id = c.id AND m.left_at IS NULL) AS member_count
          FROM channels c
@@ -78,7 +82,7 @@ export async function channelRoutes(server: FastifyInstance): Promise<void> {
     "/v1/channels/member/:tid",
     async (request) => {
       const result = await db.query(
-        `SELECT c.id, c.name, c.description, m.joined_at
+        `SELECT c.id, c.name, c.description, c.kind, c.latitude, c.longitude, m.joined_at
          FROM channel_memberships m
          JOIN channels c ON c.id = m.channel_id
          WHERE m.tid = $1 AND m.left_at IS NULL

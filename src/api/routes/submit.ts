@@ -37,6 +37,13 @@ const CROWDFUND_ID_RE = /^[a-z0-9-]{1,64}$/;
 const RSVP_STATUS = new Set(["yes", "no", "maybe"]);
 
 const CHANNEL_ID_RE = /^[a-z0-9-]{1,64}$/;
+const GENERAL_CHANNEL_ID = "general";
+// ChannelKind enum values, mirrored from tribe-sdk's protobuf:
+//   1 = GENERAL, 2 = CITY, 3 = INTEREST.
+const CHANNEL_KIND_GENERAL = 1;
+const CHANNEL_KIND_CITY = 2;
+const CHANNEL_KIND_INTEREST = 3;
+const ALLOWED_CHANNEL_KINDS = new Set([CHANNEL_KIND_CITY, CHANNEL_KIND_INTEREST]);
 
 const ALLOWED_USER_DATA_FIELDS = new Set([
   "bio",
@@ -70,6 +77,21 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
           parent_hash?: string;
           channel_id?: string;
         };
+        // Every tweet must belong to a channel. Compliant SDKs default
+        // to the reserved "general" channel; older clients that send an
+        // empty channel_id are rejected so the invariant is enforced
+        // at the protocol boundary.
+        const channelId = (tweetBody.channel_id || "").trim();
+        if (!channelId) {
+          return reply.status(400).send({
+            error: "channel_id is required for TWEET_ADD (use \"general\" for default-channel posts)",
+          });
+        }
+        if (!CHANNEL_ID_RE.test(channelId)) {
+          return reply.status(400).send({
+            error: "channel_id must match /^[a-z0-9-]{1,64}$/",
+          });
+        }
         // Convert mentions from string[] to number[] for BIGINT[] column
         const mentionsBigint = (tweetBody.mentions || []).map((m) => parseInt(m, 10)).filter((n) => !isNaN(n));
         await db.query(
@@ -82,7 +104,7 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             messageType,
             tweetBody.text,
             tweetBody.parent_hash || null,
-            tweetBody.channel_id || null,
+            channelId,
             mentionsBigint,
             tweetBody.embeds || [],
             new Date(message.data.timestamp * 1000),
@@ -183,6 +205,9 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
           channel_id?: string;
           name?: string;
           description?: string;
+          kind?: number;
+          latitude?: number;
+          longitude?: number;
         };
         if (!ch.channel_id || !ch.name) {
           return reply
@@ -194,9 +219,25 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             error: "channel_id must match /^[a-z0-9-]{1,64}$/",
           });
         }
+        if (ch.channel_id === GENERAL_CHANNEL_ID) {
+          return reply.status(400).send({
+            error: "\"general\" is reserved for the hub-seeded default channel",
+          });
+        }
+        // Default to INTEREST when a client doesn't specify a kind. GENERAL
+        // is reserved for the seeded "general" channel and may not be
+        // claimed by user CHANNEL_ADD messages.
+        const kind = ch.kind ?? CHANNEL_KIND_INTEREST;
+        if (!ALLOWED_CHANNEL_KINDS.has(kind)) {
+          return reply.status(400).send({
+            error: "kind must be CITY (2) or INTEREST (3); GENERAL (1) is reserved",
+          });
+        }
+        const latitude = kind === CHANNEL_KIND_CITY ? ch.latitude ?? null : null;
+        const longitude = kind === CHANNEL_KIND_CITY ? ch.longitude ?? null : null;
         await db.query(
-          `INSERT INTO channels (id, name, description, created_by, hash, signature, signer)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `INSERT INTO channels (id, name, description, created_by, hash, signature, signer, kind, latitude, longitude)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (id) DO NOTHING`,
           [
             ch.channel_id,
@@ -206,6 +247,9 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             message.hash,
             message.signature,
             message.signer,
+            kind,
+            latitude,
+            longitude,
           ]
         );
         break;

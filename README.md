@@ -66,6 +66,20 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | WS | `/gossip` | Hub-to-hub gossip |
 | WS | `/v1/ws` | Client WebSocket (real-time events) |
 
+## Channels
+
+Every `TWEET_ADD` must carry a non-empty `channel_id`; the submit route rejects empty values. The reserved channel id `"general"` is seeded by migration 013 on startup — it's the protocol-wide default and the target for every tweet that isn't tied to a city or interest group.
+
+`CHANNEL_ADD` carries a `kind`:
+
+| Kind | Value | Use |
+|------|-------|-----|
+| `GENERAL`  | 1 | Reserved for the seeded `general` channel; rejected on `CHANNEL_ADD`. |
+| `CITY`     | 2 | Hyperlocal channel; persists `latitude` / `longitude`. |
+| `INTEREST` | 3 | Topic / community channel. Default when `kind` is omitted. |
+
+The `channels` table exposes `kind`, `latitude`, and `longitude` via `GET /v1/channels`, `GET /v1/channels/:id`, and `GET /v1/channels/member/:tid`.
+
 ## Gossip Protocol
 
 Pull-based with five frame types: `hello` / `have` / `want` / `messages` / `ping` (+`pong`).
@@ -132,6 +146,7 @@ src/
       010_tips.sql            # tips
       011_group_dms.sql       # group_dms, group_dm_members, group_dm_messages
       012_dm_read.sql         # dm_read_receipts
+      013_channel_kinds.sql   # channels.kind / latitude / longitude + seed "general"
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
