@@ -6,48 +6,83 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 
 ## What It Does
 
-- **Stores tweets** (signed messages) in PostgreSQL, validates ed25519 signatures against on-chain app keys
+- **Stores signed messages** (tweets, reactions, DMs, bookmarks, polls, events, tasks, crowdfunds, tips, channel ops, profile fields) in PostgreSQL, validating ed25519 signatures against on-chain app keys
 - **Indexes Solana events** (TID registrations, follows, unfollows) via WebSocket subscription
-- **Syncs with peer hubs** via a gossip protocol (HAVE/WANT message exchange)
-- **Serves a REST API** for apps to read feeds, user profiles, search, and submit messages
+- **Syncs with peer hubs** via a pull-based gossip protocol (hello / have / want / messages / ping)
+- **Serves a REST API** for apps to read feeds, profiles, DMs, polls, events, tasks, crowdfunds, tips, bookmarks, notifications, karma, and search
 - **Serves a WebSocket API** for real-time updates
 
 ## API Endpoints
 
+### Core
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/v1/submit` | Submit a signed message (tweet, reaction) |
+| POST | `/v1/submit` | Submit a signed message (any `TribeMessage`) |
 | GET | `/v1/feed` | Global feed |
 | GET | `/v1/feed/:tid` | User's tweet feed |
 | GET | `/v1/feed/channel/:id` | Channel feed |
 | GET | `/v1/messages/:hash` | Single message by hash |
-| GET | `/v1/search?q=` | Text search |
+| GET | `/v1/search?q=` | Text search across tweets/users/channels |
 | GET | `/v1/replies?hash=` | Thread replies |
 | GET | `/v1/channels` | Channel list |
+
+### Identity & Social
+| Method | Path | Description |
+|--------|------|-------------|
 | GET | `/v1/user/:tid` | User profile |
 | GET | `/v1/users` | All users |
+| GET | `/v1/users/:tid/karma` | Aggregated karma score for a TID |
 | GET | `/v1/followers/:tid` | Followers list |
 | GET | `/v1/following/:tid` | Following list |
-| GET | `/v1/peers` | Connected peers |
+
+### Messaging & Bookmarks
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/dms/keys` | Register x25519 DM pubkey |
+| GET | `/v1/dms/keys/:tid` | Look up a TID's DM pubkey |
+| GET | `/v1/dms/:tid` | Inbox / conversations |
+| POST | `/v1/dms/groups` | Create a group DM |
+| POST | `/v1/dms/read` | Mark messages as read (receipts) |
+| GET | `/v1/bookmarks/:tid` | Bookmarked tweets for a TID |
+
+### Community Primitives
+| Method | Path | Description |
+|--------|------|-------------|
+| GET / POST | `/v1/polls` | List or create polls; vote |
+| GET / POST | `/v1/events` | List or create events; RSVP |
+| GET / POST | `/v1/tasks` | List or create tasks; claim/complete |
+| GET / POST | `/v1/crowdfunds` | List or create crowdfunds; pledge |
+| GET / POST | `/v1/tips` | Send and query tips |
+| GET | `/v1/notifications/:tid` | Per-TID notification feed |
+
+### Network & Media
+| Method | Path | Description |
+|--------|------|-------------|
+| GET / POST | `/v1/peers` | List peers / add a peer at runtime |
 | GET | `/v1/sync/status` | Sync state per peer |
 | POST | `/v1/upload` | Media upload |
 | GET | `/v1/media/:hash` | Serve uploaded media |
 | GET | `/health` | Hub health |
-| WS | `/gossip` | Gossip peer connection |
+| WS | `/gossip` | Hub-to-hub gossip |
 | WS | `/v1/ws` | Client WebSocket (real-time events) |
 
 ## Gossip Protocol
 
-Hubs connect to each other via WebSocket and exchange messages:
+Pull-based with five frame types: `hello` / `have` / `want` / `messages` / `ping` (+`pong`).
 
-1. **HAVE** -- periodically broadcast hashes of recent messages
-2. **WANT** -- request messages by hash that this hub doesn't have
-3. **MESSAGES** -- send full message data in response to WANT
+1. **hello** -- exchange hub IDs on connect
+2. **have** -- periodically broadcast hashes of recent messages
+3. **want** -- request messages this hub is missing
+4. **messages** -- send full message data in response to `want`
+5. **ping/pong** -- keep-alive
 
 Features:
-- Automatic reconnection with exponential backoff
+- Automatic reconnection with exponential backoff (`RECONNECT_DELAY_MS`)
+- Periodic broadcasts every `GOSSIP_INTERVAL_MS`
+- Keep-alive pings every `PING_INTERVAL_MS`
 - Deduplication (messages tracked by `received_from` hub ID)
 - Per-peer sync state tracking (`last_sync_hash`, `last_sync_at`)
+- Received messages re-validated (signature + on-chain app key) before storage
 
 ## Project Structure
 
@@ -65,6 +100,15 @@ src/
       upload.ts               # Media upload/download
       peers.ts                # Peer list, sync status
       health.ts               # Health check
+      dms.ts                  # 1:1 + group DMs, key registration, read receipts
+      bookmarks.ts            # Save/list bookmarked tweets
+      polls.ts                # Create polls, vote, tally
+      events.ts               # Create events, RSVP, list
+      tasks.ts                # Create / claim / complete tasks
+      crowdfunds.ts           # Crowdfund campaigns + pledges
+      tips.ts                 # Send and query tips
+      karma.ts                # Aggregated karma score per TID
+      notifications.ts        # Per-TID notification feed
     ws.ts                     # Client WebSocket API
   gossip/
     peer-manager.ts           # Peer connections, reconnection, scheduling
@@ -76,7 +120,18 @@ src/
     db.ts                     # PostgreSQL pool + migrations
     media-store.ts            # Disk-based media storage
     migrations/
-      001_hub.sql             # Schema: messages, sync_state, peers, social_graph
+      001_hub.sql             # messages, sync_state, peers, social_graph
+      002_dms.sql             # dm_keys, dm_conversations, dm_messages
+      003_user_data.sql       # user_data (profile fields)
+      004_channels.sql        # channels, channel_members
+      005_bookmarks.sql       # bookmarks
+      006_polls.sql           # polls, poll_votes
+      007_events.sql          # events, event_rsvps
+      008_tasks.sql           # tasks, task_claims, task_completions
+      009_crowdfunds.sql      # crowdfunds, crowdfund_pledges
+      010_tips.sql            # tips
+      011_group_dms.sql       # group_dms, group_dm_members, group_dm_messages
+      012_dm_read.sql         # dm_read_receipts
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -106,8 +161,15 @@ pnpm dev                # http://localhost:4000
 | `SOLANA_RPC_URL` | devnet | Solana JSON-RPC |
 | `SOLANA_WS_URL` | devnet | Solana WebSocket |
 | `PEERS` | (none) | Comma-separated peer gossip URLs |
-| `GOSSIP_INTERVAL_MS` | `5000` | How often to send HAVE messages |
+| `GOSSIP_INTERVAL_MS` | `5000` | How often to send `have` frames |
+| `RECONNECT_DELAY_MS` | `10000` | Base reconnection delay (exponential backoff) |
+| `PING_INTERVAL_MS` | `30000` | Keep-alive ping interval |
 | `MAX_SYNC_BATCH_SIZE` | `100` | Max messages per sync batch |
+| `MAX_TWEET_TEXT_LENGTH` | `320` | Server-side tweet length cap |
+| `APP_KEY_CACHE_TTL_MS` | `60000` | In-memory app key cache TTL |
+| `TID_REGISTRY_PROGRAM_ID` | (devnet default) | Override `tid-registry` program ID |
+| `APP_KEY_REGISTRY_PROGRAM_ID` | (devnet default) | Override `app-key-registry` program ID |
+| `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup
