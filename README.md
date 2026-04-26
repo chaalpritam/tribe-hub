@@ -110,6 +110,17 @@ For globally-unique on-chain ownership, hit:
 | GET | `/v1/channels/onchain/by-id/:id` | Slug-based lookup (derives PDA, joins off-chain metadata) |
 | GET | `/v1/channels/onchain/owner/:tid` | Channels owned by a TID |
 
+## Solana log indexer
+
+Two paths feed the on-chain mirror tables:
+
+1. **Live subscription.** `connection.onLogs(programId, …)` per program, parsed for Anchor events (`Program data: …`), dispatched to the program-specific handler. Each successful event advances `solana_indexer_state.last_processed_signature` so a restart knows where to resume.
+2. **Startup backfill.** For every indexed program, `getSignaturesForAddress(programId, { until: cursor })` walks back from "now" toward the saved cursor, paginating in batches of `SOLANA_BACKFILL_BATCH_SIZE`. Collected signatures are reversed into chronological order and replayed through the same handlers as live. The cursor is advanced as we go, so a crash mid-backfill resumes from the last replayed signature on the next start.
+
+Backfill runs **in the background** alongside the live subscription. Mirror tables all use PKs derived from on-chain data (PDAs, `(parent, actor)` composites, or `tx_signature`), so any overlap between live + backfilled events causes `ON CONFLICT DO NOTHING` rejections rather than double-counting.
+
+`SOLANA_BACKFILL_LIMIT=0` disables backfill entirely (useful for tests or during initial setup before any on-chain activity exists).
+
 ## Gossip Protocol
 
 Pull-based with five frame types: `hello` / `have` / `want` / `messages` / `ping` (+`pong`).
@@ -184,6 +195,7 @@ src/
       018_onchain_karma.sql   # onchain_karma + onchain_karma_proofs — karma-registry mirror
       019_onchain_polls.sql   # onchain_polls + onchain_poll_votes — poll-registry mirror
       020_onchain_events.sql  # onchain_events + onchain_event_rsvps — event-registry mirror
+      021_solana_indexer_state.sql # cursor table for backfill + live cursor advance
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline
@@ -229,6 +241,8 @@ pnpm dev                # http://localhost:4000
 | `KARMA_REGISTRY_PROGRAM_ID` | (placeholder default) | Override `karma-registry` program ID |
 | `POLL_REGISTRY_PROGRAM_ID` | (real keypair default) | Override `poll-registry` program ID |
 | `EVENT_REGISTRY_PROGRAM_ID` | (real keypair default) | Override `event-registry` program ID |
+| `SOLANA_BACKFILL_LIMIT` | `1000` | Max signatures per program to fetch on startup; `0` disables backfill |
+| `SOLANA_BACKFILL_BATCH_SIZE` | `100` | Page size for `getSignaturesForAddress` during backfill |
 | `MEDIA_DIR` | `./data/media` | Media storage directory |
 
 ## Multi-Node Setup

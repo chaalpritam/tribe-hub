@@ -18,6 +18,12 @@ export const config = {
   // Validation settings
   maxTweetTextLength: parseInt(process.env.MAX_TWEET_TEXT_LENGTH || "320", 10),
   appKeyCacheTtlMs: parseInt(process.env.APP_KEY_CACHE_TTL_MS || "60000", 10),
+  // Solana log backfill on startup: fetches signatures newer than the
+  // saved cursor and replays them through the same handlers as the
+  // live subscription. Existing PK constraints in the mirror tables
+  // make overlap with live events harmless. 0 disables backfill.
+  solanaBackfillLimit: parseInt(process.env.SOLANA_BACKFILL_LIMIT || "1000", 10),
+  solanaBackfillBatchSize: parseInt(process.env.SOLANA_BACKFILL_BATCH_SIZE || "100", 10),
   // Program IDs
   programIds: {
     tidRegistry: process.env.TID_REGISTRY_PROGRAM_ID || "4BSmJmRGQWKgioP9DG2bUuRS9U3V6soRauU7Nv6yGvHD",

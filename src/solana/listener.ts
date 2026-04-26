@@ -1,7 +1,8 @@
 import { createHash } from "crypto";
-import { Connection, PublicKey, Logs } from "@solana/web3.js";
+import { Connection, PublicKey, Logs, Context } from "@solana/web3.js";
 import { config } from "../config";
 import { db } from "../storage/db";
+import { advanceIndexerCursor, backfillProgram } from "./backfill";
 
 const ANCHOR_EVENT_PREFIX = "Program data: ";
 
@@ -834,25 +835,49 @@ export function startSolanaListener(): void {
     for (const { id, handler } of programHandlers) {
       const subId = connection.onLogs(
         id,
-        (logs: Logs) => {
+        (logs: Logs, ctx: Context) => {
           if (logs.err) return;
 
-          for (const log of logs.logs) {
-            if (log.startsWith(ANCHOR_EVENT_PREFIX)) {
-              const eventData = log.slice(ANCHOR_EVENT_PREFIX.length);
-              try {
-                handler(eventData, logs.signature);
-              } catch (err) {
-                console.error(`Error processing event from ${id.toBase58()}:`, err);
+          // Process every Anchor event in the log entries first…
+          (async () => {
+            for (const log of logs.logs) {
+              if (log.startsWith(ANCHOR_EVENT_PREFIX)) {
+                const eventData = log.slice(ANCHOR_EVENT_PREFIX.length);
+                try {
+                  await handler(eventData, logs.signature);
+                } catch (err) {
+                  console.error(`Error processing event from ${id.toBase58()}:`, err);
+                }
               }
             }
-          }
+            // …then advance the cursor so a hub restart picks up
+            // signatures newer than this one. The advance is gated
+            // on slot monotonicity so out-of-order delivery between
+            // live and backfill can't move the cursor backward.
+            try {
+              await advanceIndexerCursor(id, logs.signature, BigInt(ctx.slot));
+            } catch (err) {
+              console.error(
+                `Failed to advance cursor for ${id.toBase58()}:`,
+                err
+              );
+            }
+          })();
         },
         "confirmed"
       );
 
       subscriptionIds.push(subId);
       console.log(`Subscribed to Solana logs for ${id.toBase58()}`);
+    }
+
+    // Kick off backfill in the background. Live subscription is
+    // already running; existing PK constraints in the mirror tables
+    // make any overlap between live + backfilled events harmless.
+    for (const { id, handler } of programHandlers) {
+      backfillProgram(connection, id, handler).catch((err) => {
+        console.error(`Backfill failed for ${id.toBase58()}:`, err);
+      });
     }
 
     // Reset delay on successful connection
