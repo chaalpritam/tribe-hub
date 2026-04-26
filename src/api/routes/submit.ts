@@ -41,6 +41,7 @@ const ALLOWED_USER_DATA_FIELDS = new Set([
   "pfpUrl",
   "url",
   "location",
+  "city",
 ]);
 const MAX_USER_DATA_VALUE_LEN = 500;
 
