@@ -524,6 +524,8 @@ describe("GET /v1/user/:tid", () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{ tid: "42", custody_address: "abc", username: "bob", following_count: "2", followers_count: "3" }],
     });
+    // user_data lookup follow-up
+    mockQuery.mockResolvedValueOnce({ rows: [] });
 
     const res = await server.inject({ method: "GET", url: "/v1/user/42" });
     const body = JSON.parse(res.body);
@@ -531,6 +533,7 @@ describe("GET /v1/user/:tid", () => {
     expect(res.statusCode).toBe(200);
     expect(body.tid).toBe("42");
     expect(body.username).toBe("bob");
+    expect(body.profile).toEqual({});
   });
 
   it("returns 404 when not found locally and not on-chain", async () => {

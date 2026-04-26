@@ -117,6 +117,20 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
     if (result.rows.length === 0) {
       return reply.status(404).send({ error: "User not found" });
     }
-    return result.rows[0];
+
+    // Tack on the latest profile fields published as USER_DATA_ADD.
+    const fieldsResult = await db.query(
+      `SELECT DISTINCT ON (field) field, value, timestamp
+       FROM user_data
+       WHERE tid = $1
+       ORDER BY field, timestamp DESC`,
+      [request.params.tid]
+    );
+    const profile: Record<string, string> = {};
+    for (const row of fieldsResult.rows) {
+      profile[row.field] = row.value;
+    }
+
+    return { ...result.rows[0], profile };
   });
 }

@@ -10,6 +10,16 @@ const TWEET_ADD = 1;
 const TWEET_REMOVE = 2;
 const REACTION_ADD = 3;
 const REACTION_REMOVE = 4;
+const USER_DATA_ADD = 7;
+
+const ALLOWED_USER_DATA_FIELDS = new Set([
+  "bio",
+  "displayName",
+  "pfpUrl",
+  "url",
+  "location",
+]);
+const MAX_USER_DATA_VALUE_LEN = 500;
 
 export async function submitRoutes(server: FastifyInstance): Promise<void> {
   server.post<{ Body: SubmitMessageRequest }>("/v1/submit", async (request, reply) => {
@@ -94,6 +104,45 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             messageType,
             reactionBody.type.toString(),
             reactionBody.target_hash,
+            new Date(message.data.timestamp * 1000),
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case USER_DATA_ADD: {
+        const userBody = body as { field?: string; value?: string };
+        if (
+          !userBody.field ||
+          !userBody.value ||
+          typeof userBody.field !== "string" ||
+          typeof userBody.value !== "string"
+        ) {
+          return reply
+            .status(400)
+            .send({ error: "field and value are required for USER_DATA_ADD" });
+        }
+        if (!ALLOWED_USER_DATA_FIELDS.has(userBody.field)) {
+          return reply
+            .status(400)
+            .send({ error: `unsupported user_data field: ${userBody.field}` });
+        }
+        if (userBody.value.length > MAX_USER_DATA_VALUE_LEN) {
+          return reply.status(400).send({
+            error: `value exceeds max length ${MAX_USER_DATA_VALUE_LEN}`,
+          });
+        }
+        await db.query(
+          `INSERT INTO user_data (hash, tid, field, value, timestamp, signature, signer)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (hash) DO NOTHING`,
+          [
+            message.hash,
+            message.data.tid,
+            userBody.field,
+            userBody.value,
             new Date(message.data.timestamp * 1000),
             message.signature,
             message.signer,
