@@ -5,11 +5,15 @@ import { appKeyCache } from "../../validation/app-key-cache";
 import { SubmitMessageRequest } from "../../types";
 import { gossipDm, gossipDmKey } from "../../gossip/protocol";
 
-const DM_KEY_REGISTER = 12;
-const DM_SEND = 13;
-const DM_GROUP_CREATE = 26;
-const DM_GROUP_SEND = 27;
-const DM_READ = 28;
+import { MessageType } from "../../messages/types";
+
+const {
+  DM_KEY_REGISTER,
+  DM_SEND,
+  DM_GROUP_CREATE,
+  DM_GROUP_SEND,
+  DM_READ,
+} = MessageType;
 
 const GROUP_ID_RE = /^[a-z0-9-]{1,64}$/;
 

@@ -5,27 +5,30 @@ import { db } from "../../storage/db";
 import { gossipMessage } from "../../gossip/protocol";
 import { broadcastToClients } from "../ws";
 
-// Message types
-const TWEET_ADD = 1;
-const TWEET_REMOVE = 2;
-const REACTION_ADD = 3;
-const REACTION_REMOVE = 4;
-const USER_DATA_ADD = 7;
-const CHANNEL_ADD = 9;
-const CHANNEL_JOIN = 10;
-const CHANNEL_LEAVE = 11;
-const BOOKMARK_ADD = 14;
-const BOOKMARK_REMOVE = 15;
-const POLL_ADD = 16;
-const POLL_VOTE = 17;
-const EVENT_ADD = 18;
-const EVENT_RSVP = 19;
-const TASK_ADD = 20;
-const TASK_CLAIM = 21;
-const TASK_COMPLETE = 22;
-const CROWDFUND_ADD = 23;
-const CROWDFUND_PLEDGE = 24;
-const TIP_ADD = 25;
+import { MessageType } from "../../messages/types";
+
+const {
+  TWEET_ADD,
+  TWEET_REMOVE,
+  REACTION_ADD,
+  REACTION_REMOVE,
+  USER_DATA_ADD,
+  CHANNEL_ADD,
+  CHANNEL_JOIN,
+  CHANNEL_LEAVE,
+  BOOKMARK_ADD,
+  BOOKMARK_REMOVE,
+  POLL_ADD,
+  POLL_VOTE,
+  EVENT_ADD,
+  EVENT_RSVP,
+  TASK_ADD,
+  TASK_CLAIM,
+  TASK_COMPLETE,
+  CROWDFUND_ADD,
+  CROWDFUND_PLEDGE,
+  TIP_ADD,
+} = MessageType;
 
 const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
 const EVENT_ID_RE = /^[a-z0-9-]{1,64}$/;
