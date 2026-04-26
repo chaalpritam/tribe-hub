@@ -3,6 +3,7 @@ import nacl from "tweetnacl";
 import { db } from "../../storage/db";
 import { appKeyCache } from "../../validation/app-key-cache";
 import { SubmitMessageRequest } from "../../types";
+import { gossipDm, gossipDmKey } from "../../gossip/protocol";
 
 const DM_KEY_REGISTER = 12;
 const DM_SEND = 13;
@@ -83,6 +84,8 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
                updated_at    = NOW()`,
         [message.data.tid, body.x25519_pubkey]
       );
+
+      gossipDmKey(String(message.data.tid), body.x25519_pubkey);
 
       return { tid: message.data.tid, x25519_pubkey: body.x25519_pubkey };
     }
@@ -191,6 +194,19 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
           message.signer,
         ]
       );
+
+      gossipDm({
+        hash: message.hash,
+        conversationId,
+        senderTid: String(senderTid),
+        recipientTid: String(recipientTid),
+        ciphertext: body.ciphertext,
+        nonce: body.nonce,
+        senderX25519: body.sender_x25519,
+        timestamp: sentAt.toISOString(),
+        signature: message.signature,
+        signer: message.signer,
+      });
 
       return { hash: message.hash, conversation_id: conversationId };
     }

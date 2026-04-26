@@ -1,6 +1,8 @@
+import nacl from "tweetnacl";
 import { db } from "../storage/db";
-import { GossipMessage } from "../types";
+import { GossipMessage, GossipDm } from "../types";
 import { validateGossipMessage } from "../validation/verifier";
+import { appKeyCache } from "../validation/app-key-cache";
 import { broadcastToClients } from "../api/ws";
 
 /**
@@ -156,5 +158,109 @@ export async function incrementPeerMessageCount(hubId: string, count: number): P
   await db.query(
     `UPDATE peers SET message_count = message_count + $2, last_seen = NOW() WHERE hub_id = $1`,
     [hubId, count]
+  );
+}
+
+// ── DM gossip ────────────────────────────────────────────────────────
+
+function conversationIdFor(a: number | string, b: number | string): string {
+  const ai = typeof a === "string" ? parseInt(a, 10) : a;
+  const bi = typeof b === "string" ? parseInt(b, 10) : b;
+  const [lo, hi] = ai < bi ? [ai, bi] : [bi, ai];
+  return `${lo}:${hi}`;
+}
+
+/**
+ * Store an encrypted DM received from a peer hub. Verifies the
+ * envelope signature + that the signer is a registered app key for
+ * the sender TID.
+ */
+export async function storeGossipDm(
+  msg: GossipDm,
+  fromHubId: string
+): Promise<boolean> {
+  // Same signature + app-key check the /v1/dm/send route applies.
+  try {
+    const hash = Buffer.from(msg.hash, "base64");
+    const signature = Buffer.from(msg.signature, "base64");
+    const signer = Buffer.from(msg.signer, "base64");
+    if (!nacl.sign.detached.verify(hash, signature, signer)) {
+      console.warn(`Rejected gossip DM ${msg.hash}: bad signature`);
+      return false;
+    }
+    const signerHex = Buffer.from(signer).toString("hex");
+    const valid = await appKeyCache.isValid(msg.senderTid, signerHex);
+    if (!valid) {
+      console.warn(`Rejected gossip DM ${msg.hash}: signer not an app key for ${msg.senderTid}`);
+      return false;
+    }
+  } catch (err) {
+    console.warn(`Rejected gossip DM ${msg.hash}: verify error`, err);
+    return false;
+  }
+
+  const conversationId = msg.conversationId ||
+    conversationIdFor(msg.senderTid, msg.recipientTid);
+  const sentAt = new Date(msg.timestamp);
+
+  await db.query(
+    `INSERT INTO dm_conversations (id, tid_a, tid_b, last_message_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (id) DO UPDATE
+       SET last_message_at = GREATEST(dm_conversations.last_message_at, EXCLUDED.last_message_at)`,
+    [
+      conversationId,
+      Math.min(parseInt(msg.senderTid, 10), parseInt(msg.recipientTid, 10)),
+      Math.max(parseInt(msg.senderTid, 10), parseInt(msg.recipientTid, 10)),
+      sentAt,
+    ]
+  );
+
+  const result = await db.query(
+    `INSERT INTO dm_messages
+       (hash, conversation_id, sender_tid, recipient_tid,
+        ciphertext, nonce, sender_x25519, timestamp, signature, signer)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (hash) DO NOTHING`,
+    [
+      msg.hash,
+      conversationId,
+      msg.senderTid,
+      msg.recipientTid,
+      msg.ciphertext,
+      msg.nonce,
+      msg.senderX25519,
+      sentAt,
+      msg.signature,
+      msg.signer,
+    ]
+  );
+
+  const stored = (result.rowCount ?? 0) > 0;
+  if (stored) {
+    console.log(`Stored gossip DM ${msg.hash.slice(0, 12)}… from ${fromHubId}`);
+    broadcastToClients("new_dm", {
+      hash: msg.hash,
+      conversationId,
+      recipientTid: msg.recipientTid,
+    });
+  }
+  return stored;
+}
+
+/**
+ * Store / refresh a DM key gossiped from a peer hub. Idempotent.
+ */
+export async function storeGossipDmKey(
+  tid: string,
+  x25519Pubkey: string
+): Promise<void> {
+  await db.query(
+    `INSERT INTO dm_keys (tid, x25519_pubkey, registered_at, updated_at)
+     VALUES ($1, $2, NOW(), NOW())
+     ON CONFLICT (tid) DO UPDATE
+       SET x25519_pubkey = EXCLUDED.x25519_pubkey,
+           updated_at    = NOW()`,
+    [tid, x25519Pubkey]
   );
 }

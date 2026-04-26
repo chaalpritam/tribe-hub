@@ -43,9 +43,40 @@ export interface GossipMessage {
 }
 
 export interface GossipEnvelope {
-  type: "hello" | "have" | "want" | "messages" | "ping" | "pong";
+  type:
+    | "hello"
+    | "have"
+    | "want"
+    | "messages"
+    | "dm_messages"
+    | "dm_key"
+    | "ping"
+    | "pong";
   hubId: string;
   payload: unknown;
+}
+
+/** DM ciphertext as gossiped between hubs. Mirrors dm_messages row. */
+export interface GossipDm {
+  hash: string;
+  conversationId: string;
+  senderTid: string;
+  recipientTid: string;
+  ciphertext: string;
+  nonce: string;
+  senderX25519: string;
+  timestamp: string;
+  signature: string;
+  signer: string;
+}
+
+export interface DmMessagesPayload {
+  messages: GossipDm[];
+}
+
+export interface DmKeyPayload {
+  tid: string;
+  x25519Pubkey: string;
 }
 
 export interface HelloPayload {

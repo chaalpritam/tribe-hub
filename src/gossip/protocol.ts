@@ -6,13 +6,18 @@ import {
   HavePayload,
   WantPayload,
   MessagesPayload,
+  DmMessagesPayload,
+  DmKeyPayload,
   GossipMessage,
+  GossipDm,
 } from "../types";
 import {
   getMessageHashes,
   getMessagesByHashes,
   findMissingHashes,
   storeGossipMessage,
+  storeGossipDm,
+  storeGossipDmKey,
   getLastSyncTime,
   updateSyncState,
   incrementPeerMessageCount,
@@ -78,6 +83,43 @@ export function gossipMessage(msg: GossipMessage): void {
     type: "messages",
     hubId: config.hubId,
     payload: { messages: [msg] } as MessagesPayload,
+  };
+
+  for (const [, ws] of connectedPeers) {
+    send(ws, envelope);
+  }
+}
+
+/**
+ * Gossip a freshly-received encrypted DM to peers. Push-only — peers
+ * that miss this gossip won't catch up, but the recipient can still
+ * read it from the originating hub.
+ */
+export function gossipDm(msg: GossipDm): void {
+  if (connectedPeers.size === 0) return;
+
+  const envelope: GossipEnvelope = {
+    type: "dm_messages",
+    hubId: config.hubId,
+    payload: { messages: [msg] } as DmMessagesPayload,
+  };
+
+  for (const [, ws] of connectedPeers) {
+    send(ws, envelope);
+  }
+}
+
+/**
+ * Gossip a DM key registration to peers so cross-hub recipient lookup
+ * works without round-tripping back to the originating hub.
+ */
+export function gossipDmKey(tid: string, x25519Pubkey: string): void {
+  if (connectedPeers.size === 0) return;
+
+  const envelope: GossipEnvelope = {
+    type: "dm_key",
+    hubId: config.hubId,
+    payload: { tid, x25519Pubkey } as DmKeyPayload,
   };
 
   for (const [, ws] of connectedPeers) {
@@ -220,6 +262,34 @@ async function handlePeerMessage(
         await updateSyncState(msg.hubId, lastHash);
       }
       // NOTE: Do NOT re-gossip received messages to other peers (prevents infinite loops)
+      break;
+    }
+
+    case "dm_messages": {
+      const payload = msg.payload as DmMessagesPayload;
+      if (!Array.isArray(payload.messages) || payload.messages.length > 1000) {
+        console.warn(
+          `Rejected dm_messages from ${msg.hubId}: invalid or too large (${payload.messages?.length})`
+        );
+        break;
+      }
+      let stored = 0;
+      for (const dm of payload.messages) {
+        const ok = await storeGossipDm(dm, msg.hubId);
+        if (ok) stored++;
+      }
+      if (stored > 0) {
+        console.log(`Stored ${stored}/${payload.messages.length} DMs from ${msg.hubId}`);
+        await incrementPeerMessageCount(msg.hubId, stored);
+      }
+      // Don't re-gossip — same loop-prevention rule as tweets.
+      break;
+    }
+
+    case "dm_key": {
+      const payload = msg.payload as DmKeyPayload;
+      if (!payload?.tid || !payload?.x25519Pubkey) break;
+      await storeGossipDmKey(payload.tid, payload.x25519Pubkey);
       break;
     }
 
