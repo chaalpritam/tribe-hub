@@ -198,6 +198,7 @@ src/
       019_onchain_polls.sql   # onchain_polls + onchain_poll_votes — poll-registry mirror
       020_onchain_events.sql  # onchain_events + onchain_event_rsvps — event-registry mirror
       021_solana_indexer_state.sql # cursor table for backfill + live cursor advance
+      022_onchain_events_metadata_hash.sql # bridge column linking onchain_events → events via BLAKE3 hash
   validation/
     app-key-cache.ts          # In-memory cache of on-chain app keys (60s TTL)
     verifier.ts               # Signature verification pipeline

@@ -109,16 +109,27 @@ export async function eventRoutes(server: FastifyInstance): Promise<void> {
         ? "e.created_at DESC"
         : "e.starts_at ASC";
     params.push(limit, offset);
+    // LEFT JOIN against the off-chain events table on the BLAKE3
+    // hash so callers get title / description / location_text /
+    // image_url resolved in a single round trip when the indexer
+    // captured the metadata_hash. Falls back to NULL columns when
+    // not yet available; clients render placeholder copy.
     const result = await db.query(
       `SELECT e.pda, e.creator, e.creator_tid, e.event_id, e.starts_at,
-              e.created_at, e.create_tx_signature,
+              e.created_at, e.create_tx_signature, e.metadata_hash,
+              ev_off.title         AS off_title,
+              ev_off.description   AS off_description,
+              ev_off.location_text AS off_location_text,
+              ev_off.image_url     AS off_image_url,
               COUNT(*) FILTER (WHERE r.status = 1)::int AS yes_count,
               COUNT(*) FILTER (WHERE r.status = 2)::int AS no_count,
               COUNT(*) FILTER (WHERE r.status = 3)::int AS maybe_count
        FROM onchain_events e
        LEFT JOIN onchain_event_rsvps r ON r.event = e.pda
+       LEFT JOIN events ev_off ON ev_off.hash = e.metadata_hash
        ${where}
-       GROUP BY e.pda
+       GROUP BY e.pda, ev_off.title, ev_off.description,
+                ev_off.location_text, ev_off.image_url
        ORDER BY ${orderBy}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
@@ -127,15 +138,20 @@ export async function eventRoutes(server: FastifyInstance): Promise<void> {
   });
 
   // Single on-chain event with yes/no/maybe counts aggregated from
-  // the rsvps table.
+  // the rsvps table. Same metadata-hash join as the list endpoint.
   server.get<{ Params: { pda: string } }>(
     "/v1/events/onchain/:pda",
     async (request, reply) => {
       const eventResult = await db.query(
-        `SELECT pda, creator, creator_tid, event_id, starts_at,
-                created_at, create_tx_signature
-         FROM onchain_events
-         WHERE pda = $1`,
+        `SELECT e.pda, e.creator, e.creator_tid, e.event_id, e.starts_at,
+                e.created_at, e.create_tx_signature, e.metadata_hash,
+                ev_off.title         AS off_title,
+                ev_off.description   AS off_description,
+                ev_off.location_text AS off_location_text,
+                ev_off.image_url     AS off_image_url
+         FROM onchain_events e
+         LEFT JOIN events ev_off ON ev_off.hash = e.metadata_hash
+         WHERE e.pda = $1`,
         [request.params.pda]
       );
       if (eventResult.rows.length === 0) {

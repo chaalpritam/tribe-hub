@@ -4,6 +4,41 @@ import { config } from "../config";
 import { db } from "../storage/db";
 import { advanceIndexerCursor, backfillProgram } from "./backfill";
 
+// Lazy module-level read-only Connection for handlers that need to
+// fetch on-chain account data (e.g. reading metadata_hash off the
+// Event PDA after an EventCreated log fires). Sharing one client
+// across handler invocations is fine — the underlying HTTP keepalive
+// makes this efficient.
+let _readConnection: Connection | null = null;
+function getReadConnection(): Connection {
+  if (!_readConnection) {
+    _readConnection = new Connection(config.solanaRpcUrl, "confirmed");
+  }
+  return _readConnection;
+}
+
+/** Fetch a 32-byte slice off an on-chain account at a known offset
+ *  and return it base64-encoded. Returns null on RPC failure or when
+ *  the account is shorter than expected — callers fall back to a
+ *  NULL metadata_hash and the API gracefully shows placeholder copy. */
+async function readBytesAt(
+  pda: PublicKey,
+  offset: number,
+  length: number
+): Promise<string | null> {
+  try {
+    const acct = await getReadConnection().getAccountInfo(pda);
+    if (!acct || acct.data.length < offset + length) return null;
+    return acct.data.subarray(offset, offset + length).toString("base64");
+  } catch (err) {
+    console.warn(
+      `Account read failed for ${pda.toBase58()} offset=${offset}:`,
+      err
+    );
+    return null;
+  }
+}
+
 const ANCHOR_EVENT_PREFIX = "Program data: ";
 
 // --- Event discriminators ---
@@ -733,10 +768,26 @@ async function processEventEvent(
     const startsAtSec = data.readBigInt64LE(80);
     const startsAtDate = new Date(Number(startsAtSec) * 1000);
 
+    // Read metadata_hash off the on-chain Event account. Layout
+    // (after the 8-byte Anchor discriminator):
+    //   creator(32) creator_tid(8) event_id(8) starts_at(8) ends_at(8)
+    //   has_end(1) latitude(8) longitude(8) has_location(1)
+    //   yes_count(4) no_count(4) maybe_count(4) created_at(8)
+    //   metadata_hash(32) bump(1)
+    // → metadata_hash starts at offset 8 + 110 = 118 in raw account
+    //   data (110 after the discriminator).
+    const METADATA_HASH_OFFSET = 8 + 110;
+    const metadataHashB64 = await readBytesAt(
+      new PublicKey(eventPda),
+      METADATA_HASH_OFFSET,
+      32
+    );
+
     await db.query(
       `INSERT INTO onchain_events (
-         pda, creator, creator_tid, event_id, starts_at, create_tx_signature
-       ) VALUES ($1, $2, $3, $4, $5, $6)
+         pda, creator, creator_tid, event_id, starts_at,
+         create_tx_signature, metadata_hash
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (pda) DO NOTHING`,
       [
         eventPda,
@@ -745,10 +796,11 @@ async function processEventEvent(
         eventId.toString(),
         startsAtDate,
         txSignature,
+        metadataHashB64,
       ]
     );
     console.log(
-      `EventCreated: pda=${eventPda} creator_tid=${creatorTid} starts_at=${startsAtSec} tx=${txSignature}`
+      `EventCreated: pda=${eventPda} creator_tid=${creatorTid} starts_at=${startsAtSec} metadata_hash=${metadataHashB64 ? "yes" : "n/a"} tx=${txSignature}`
     );
   } else if (discriminator.equals(EVENT_DISCRIMINATORS.eventRsvped)) {
     // event(32) | attendee(32) | attendee_tid(8) | status(1)
