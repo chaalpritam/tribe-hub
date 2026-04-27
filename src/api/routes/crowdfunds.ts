@@ -88,7 +88,7 @@ export async function crowdfundRoutes(server: FastifyInstance): Promise<void> {
     const params: unknown[] = [];
     if (request.query.status !== undefined) {
       params.push(parseInt(request.query.status, 10));
-      filters.push(`status = $${params.length}`);
+      filters.push(`c.status = $${params.length}`);
     }
     if (request.query.creator_tid !== undefined) {
       params.push(request.query.creator_tid);
@@ -108,9 +108,11 @@ export async function crowdfundRoutes(server: FastifyInstance): Promise<void> {
               cf_off.title       AS off_title,
               cf_off.description AS off_description,
               cf_off.image_url   AS off_image_url,
-              cf_off.currency    AS off_currency
+              cf_off.currency    AS off_currency,
+              ti.username        AS creator_username
        FROM onchain_crowdfunds c
        LEFT JOIN crowdfunds cf_off ON cf_off.hash = c.metadata_hash
+       LEFT JOIN tids ti ON ti.tid = c.creator_tid
        ${where}
        ORDER BY c.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -131,9 +133,11 @@ export async function crowdfundRoutes(server: FastifyInstance): Promise<void> {
                 cf_off.title       AS off_title,
                 cf_off.description AS off_description,
                 cf_off.image_url   AS off_image_url,
-                cf_off.currency    AS off_currency
+                cf_off.currency    AS off_currency,
+                ti.username        AS creator_username
          FROM onchain_crowdfunds c
          LEFT JOIN crowdfunds cf_off ON cf_off.hash = c.metadata_hash
+         LEFT JOIN tids ti ON ti.tid = c.creator_tid
          WHERE c.pda = $1`,
         [request.params.pda]
       );

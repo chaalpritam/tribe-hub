@@ -99,6 +99,7 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
               p.created_at, p.create_tx_signature, p.metadata_hash,
               po_off.question AS off_question,
               po_off.options  AS off_options,
+              ti.username     AS creator_username,
               (SELECT COUNT(*)::int
                  FROM onchain_poll_votes v
                  WHERE v.poll = p.pda) AS total_votes,
@@ -111,6 +112,7 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
                  ) t) AS option_tallies
        FROM onchain_polls p
        LEFT JOIN polls po_off ON po_off.hash = p.metadata_hash
+       LEFT JOIN tids ti ON ti.tid = p.creator_tid
        ${where}
        ORDER BY p.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -128,9 +130,11 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
         `SELECT p.pda, p.creator, p.creator_tid, p.poll_id, p.option_count,
                 p.created_at, p.create_tx_signature, p.metadata_hash,
                 po_off.question AS off_question,
-                po_off.options  AS off_options
+                po_off.options  AS off_options,
+                ti.username     AS creator_username
          FROM onchain_polls p
          LEFT JOIN polls po_off ON po_off.hash = p.metadata_hash
+         LEFT JOIN tids ti ON ti.tid = p.creator_tid
          WHERE p.pda = $1`,
         [request.params.pda]
       );

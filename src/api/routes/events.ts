@@ -121,15 +121,17 @@ export async function eventRoutes(server: FastifyInstance): Promise<void> {
               ev_off.description   AS off_description,
               ev_off.location_text AS off_location_text,
               ev_off.image_url     AS off_image_url,
+              t.username           AS creator_username,
               COUNT(*) FILTER (WHERE r.status = 1)::int AS yes_count,
               COUNT(*) FILTER (WHERE r.status = 2)::int AS no_count,
               COUNT(*) FILTER (WHERE r.status = 3)::int AS maybe_count
        FROM onchain_events e
        LEFT JOIN onchain_event_rsvps r ON r.event = e.pda
        LEFT JOIN events ev_off ON ev_off.hash = e.metadata_hash
+       LEFT JOIN tids t ON t.tid = e.creator_tid
        ${where}
        GROUP BY e.pda, ev_off.title, ev_off.description,
-                ev_off.location_text, ev_off.image_url
+                ev_off.location_text, ev_off.image_url, t.username
        ORDER BY ${orderBy}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
@@ -148,9 +150,11 @@ export async function eventRoutes(server: FastifyInstance): Promise<void> {
                 ev_off.title         AS off_title,
                 ev_off.description   AS off_description,
                 ev_off.location_text AS off_location_text,
-                ev_off.image_url     AS off_image_url
+                ev_off.image_url     AS off_image_url,
+                t.username           AS creator_username
          FROM onchain_events e
          LEFT JOIN events ev_off ON ev_off.hash = e.metadata_hash
+         LEFT JOIN tids t ON t.tid = e.creator_tid
          WHERE e.pda = $1`,
         [request.params.pda]
       );

@@ -92,9 +92,13 @@ export async function taskRoutes(server: FastifyInstance): Promise<void> {
               t.metadata_hash,
               tk_off.title       AS off_title,
               tk_off.description AS off_description,
-              tk_off.reward_text AS off_reward_text
+              tk_off.reward_text AS off_reward_text,
+              ti_creator.username AS creator_username,
+              ti_claimer.username AS claimer_username
        FROM onchain_tasks t
        LEFT JOIN tasks tk_off ON tk_off.hash = t.metadata_hash
+       LEFT JOIN tids ti_creator ON ti_creator.tid = t.creator_tid
+       LEFT JOIN tids ti_claimer ON ti_claimer.tid = t.claimer_tid
        ${where}
        ORDER BY t.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -116,9 +120,13 @@ export async function taskRoutes(server: FastifyInstance): Promise<void> {
                 t.metadata_hash,
                 tk_off.title       AS off_title,
                 tk_off.description AS off_description,
-                tk_off.reward_text AS off_reward_text
+                tk_off.reward_text AS off_reward_text,
+                ti_creator.username AS creator_username,
+                ti_claimer.username AS claimer_username
          FROM onchain_tasks t
          LEFT JOIN tasks tk_off ON tk_off.hash = t.metadata_hash
+         LEFT JOIN tids ti_creator ON ti_creator.tid = t.creator_tid
+         LEFT JOIN tids ti_claimer ON ti_claimer.tid = t.claimer_tid
          WHERE t.pda = $1`,
         [request.params.pda]
       );
