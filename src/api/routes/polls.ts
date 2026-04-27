@@ -91,18 +91,27 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
     params.push(limit, offset);
     // LEFT JOIN against the off-chain polls envelope table on BLAKE3
     // hash so callers get question + options array resolved in a
-    // single round trip.
+    // single round trip. option_tallies is a JSON object mapping
+    // option_index → vote count, derived via correlated subquery so
+    // we don't have to GROUP BY at the outer level.
     const result = await db.query(
       `SELECT p.pda, p.creator, p.creator_tid, p.poll_id, p.option_count,
               p.created_at, p.create_tx_signature, p.metadata_hash,
               po_off.question AS off_question,
               po_off.options  AS off_options,
-              COUNT(v.voter)::int AS total_votes
+              (SELECT COUNT(*)::int
+                 FROM onchain_poll_votes v
+                 WHERE v.poll = p.pda) AS total_votes,
+              (SELECT COALESCE(json_object_agg(option_index, votes), '{}'::json)
+                 FROM (
+                   SELECT option_index, COUNT(*)::int AS votes
+                   FROM onchain_poll_votes
+                   WHERE poll = p.pda
+                   GROUP BY option_index
+                 ) t) AS option_tallies
        FROM onchain_polls p
-       LEFT JOIN onchain_poll_votes v ON v.poll = p.pda
        LEFT JOIN polls po_off ON po_off.hash = p.metadata_hash
        ${where}
-       GROUP BY p.pda, po_off.question, po_off.options
        ORDER BY p.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
