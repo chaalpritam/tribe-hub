@@ -51,11 +51,13 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/v1/polls` | List or create polls (off-chain envelopes); vote |
+| GET | `/v1/polls/onchain` | List on-chain polls with total vote counts inline |
 | GET | `/v1/polls/onchain/:pda` | Single poll with aggregated tallies + total votes |
 | GET | `/v1/polls/onchain/creator/:tid` | Polls created by a TID |
 | GET | `/v1/polls/onchain/voter/:tid` | Votes a TID has cast on chain |
 | GET | `/v1/polls/onchain/:pda/votes` | All votes on a specific poll |
 | GET / POST | `/v1/events` | List or create events (off-chain envelopes); RSVP |
+| GET | `/v1/events/onchain` | List on-chain events with RSVP counts (filter by creator_tid; defaults to upcoming) |
 | GET | `/v1/events/onchain/:pda` | Single event with yes/no/maybe counts |
 | GET | `/v1/events/onchain/creator/:tid` | Events created by a TID |
 | GET | `/v1/events/onchain/attendee/:tid` | Events a TID has RSVPed to |

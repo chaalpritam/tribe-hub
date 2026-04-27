@@ -70,6 +70,40 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
 
   // ── On-chain mirror: Poll + Vote PDAs from poll-registry ──────────
 
+  // List on-chain polls with total vote counts inline. Same shape as
+  // /v1/events/onchain (newest first by default; creator_tid filter).
+  server.get<{
+    Querystring: {
+      limit?: string;
+      offset?: string;
+      creator_tid?: string;
+    };
+  }>("/v1/polls/onchain", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "50", 10), 100);
+    const offset = parseInt(request.query.offset || "0", 10);
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (request.query.creator_tid !== undefined) {
+      params.push(request.query.creator_tid);
+      filters.push(`p.creator_tid = $${params.length}`);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    params.push(limit, offset);
+    const result = await db.query(
+      `SELECT p.pda, p.creator, p.creator_tid, p.poll_id, p.option_count,
+              p.created_at, p.create_tx_signature,
+              COUNT(v.voter)::int AS total_votes
+       FROM onchain_polls p
+       LEFT JOIN onchain_poll_votes v ON v.poll = p.pda
+       ${where}
+       GROUP BY p.pda
+       ORDER BY p.created_at DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+    return { polls: result.rows };
+  });
+
   // Single on-chain poll, with per-option tallies aggregated from
   // the votes table. Cheap because option_count is capped at 8.
   server.get<{ Params: { pda: string } }>(

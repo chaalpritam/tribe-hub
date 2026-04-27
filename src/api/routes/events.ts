@@ -78,6 +78,54 @@ export async function eventRoutes(server: FastifyInstance): Promise<void> {
 
   // ── On-chain mirror: Event + Rsvp PDAs from event-registry ────────
 
+  // List on-chain events. Filterable by creator_tid; sorted by
+  // starts_at asc by default so callers see upcoming events first.
+  // RSVP counts are joined inline so the home-feed list-render
+  // doesn't need a per-row follow-up.
+  server.get<{
+    Querystring: {
+      limit?: string;
+      offset?: string;
+      creator_tid?: string;
+      /** "upcoming" (default) returns events with starts_at >= now */
+      filter?: "all" | "upcoming";
+      sort?: "starts_at_asc" | "created_at_desc";
+    };
+  }>("/v1/events/onchain", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "50", 10), 100);
+    const offset = parseInt(request.query.offset || "0", 10);
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (request.query.creator_tid !== undefined) {
+      params.push(request.query.creator_tid);
+      filters.push(`e.creator_tid = $${params.length}`);
+    }
+    if ((request.query.filter ?? "upcoming") === "upcoming") {
+      filters.push(`e.starts_at >= NOW()`);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const orderBy =
+      request.query.sort === "created_at_desc"
+        ? "e.created_at DESC"
+        : "e.starts_at ASC";
+    params.push(limit, offset);
+    const result = await db.query(
+      `SELECT e.pda, e.creator, e.creator_tid, e.event_id, e.starts_at,
+              e.created_at, e.create_tx_signature,
+              COUNT(*) FILTER (WHERE r.status = 1)::int AS yes_count,
+              COUNT(*) FILTER (WHERE r.status = 2)::int AS no_count,
+              COUNT(*) FILTER (WHERE r.status = 3)::int AS maybe_count
+       FROM onchain_events e
+       LEFT JOIN onchain_event_rsvps r ON r.event = e.pda
+       ${where}
+       GROUP BY e.pda
+       ORDER BY ${orderBy}
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+    return { events: result.rows };
+  });
+
   // Single on-chain event with yes/no/maybe counts aggregated from
   // the rsvps table.
   server.get<{ Params: { pda: string } }>(
