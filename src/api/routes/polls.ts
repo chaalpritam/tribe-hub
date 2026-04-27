@@ -89,14 +89,20 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
     }
     const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
     params.push(limit, offset);
+    // LEFT JOIN against the off-chain polls envelope table on BLAKE3
+    // hash so callers get question + options array resolved in a
+    // single round trip.
     const result = await db.query(
       `SELECT p.pda, p.creator, p.creator_tid, p.poll_id, p.option_count,
-              p.created_at, p.create_tx_signature,
+              p.created_at, p.create_tx_signature, p.metadata_hash,
+              po_off.question AS off_question,
+              po_off.options  AS off_options,
               COUNT(v.voter)::int AS total_votes
        FROM onchain_polls p
        LEFT JOIN onchain_poll_votes v ON v.poll = p.pda
+       LEFT JOIN polls po_off ON po_off.hash = p.metadata_hash
        ${where}
-       GROUP BY p.pda
+       GROUP BY p.pda, po_off.question, po_off.options
        ORDER BY p.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
@@ -110,10 +116,13 @@ export async function pollRoutes(server: FastifyInstance): Promise<void> {
     "/v1/polls/onchain/:pda",
     async (request, reply) => {
       const pollResult = await db.query(
-        `SELECT pda, creator, creator_tid, poll_id, option_count,
-                created_at, create_tx_signature
-         FROM onchain_polls
-         WHERE pda = $1`,
+        `SELECT p.pda, p.creator, p.creator_tid, p.poll_id, p.option_count,
+                p.created_at, p.create_tx_signature, p.metadata_hash,
+                po_off.question AS off_question,
+                po_off.options  AS off_options
+         FROM onchain_polls p
+         LEFT JOIN polls po_off ON po_off.hash = p.metadata_hash
+         WHERE p.pda = $1`,
         [request.params.pda]
       );
       if (pollResult.rows.length === 0) {

@@ -326,11 +326,21 @@ async function processCrowdfundEvent(
     const deadlineAt = data.readBigInt64LE(88);
     const deadlineDate = new Date(Number(deadlineAt) * 1000);
 
+    // metadata_hash sits at offset 8 + 86 in the Crowdfund account:
+    //   creator(32) creator_tid(8) crowdfund_id(8) goal_amount(8)
+    //   total_pledged(8) pledge_count(4) deadline_at(8) created_at(8)
+    //   status(1) bump(1) → 86 bytes after the disc.
+    const metadataHashB64 = await readBytesAt(
+      new PublicKey(crowdfund),
+      8 + 86,
+      32
+    );
+
     await db.query(
       `INSERT INTO onchain_crowdfunds (
          pda, creator, creator_tid, crowdfund_id, goal_amount,
-         deadline_at, status, create_tx_signature
-       ) VALUES ($1, $2, $3, $4, $5, $6, 0, $7)
+         deadline_at, status, create_tx_signature, metadata_hash
+       ) VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8)
        ON CONFLICT (pda) DO NOTHING`,
       [
         crowdfund,
@@ -340,10 +350,11 @@ async function processCrowdfundEvent(
         goalAmount.toString(),
         deadlineDate,
         txSignature,
+        metadataHashB64,
       ]
     );
     console.log(
-      `CrowdfundCreated: pda=${crowdfund} creator_tid=${creatorTid} goal=${goalAmount} tx=${txSignature}`
+      `CrowdfundCreated: pda=${crowdfund} creator_tid=${creatorTid} goal=${goalAmount} metadata_hash=${metadataHashB64 ? "yes" : "n/a"} tx=${txSignature}`
     );
   } else if (discriminator.equals(CROWDFUND_DISCRIMINATORS.crowdfundPledged)) {
     // crowdfund(32) | backer(32) | backer_tid(8) | amount(8)
@@ -456,11 +467,21 @@ async function processTaskEvent(
     const taskId = readU64LE(data, 72);
     const rewardAmount = readU64LE(data, 80);
 
+    // metadata_hash sits at offset 8 + 122 in the Task account:
+    //   creator(32) creator_tid(8) task_id(8) status(1) reward_amount(8)
+    //   claimer(32) claimer_tid(8) has_claimer(1) created_at(8)
+    //   claimed_at(8) completed_at(8) → 122 bytes after the disc.
+    const metadataHashB64 = await readBytesAt(
+      new PublicKey(task),
+      8 + 122,
+      32
+    );
+
     await db.query(
       `INSERT INTO onchain_tasks (
          pda, creator, creator_tid, task_id, status,
-         reward_amount, create_tx_signature
-       ) VALUES ($1, $2, $3, $4, 0, $5, $6)
+         reward_amount, create_tx_signature, metadata_hash
+       ) VALUES ($1, $2, $3, $4, 0, $5, $6, $7)
        ON CONFLICT (pda) DO NOTHING`,
       [
         task,
@@ -469,10 +490,11 @@ async function processTaskEvent(
         taskId.toString(),
         rewardAmount.toString(),
         txSignature,
+        metadataHashB64,
       ]
     );
     console.log(
-      `TaskCreated: pda=${task} creator_tid=${creatorTid} reward=${rewardAmount} tx=${txSignature}`
+      `TaskCreated: pda=${task} creator_tid=${creatorTid} reward=${rewardAmount} metadata_hash=${metadataHashB64 ? "yes" : "n/a"} tx=${txSignature}`
     );
   } else if (discriminator.equals(TASK_DISCRIMINATORS.taskClaimed)) {
     // task(32) | claimer(32) | claimer_tid(8)
@@ -711,12 +733,31 @@ async function processPollEvent(
     const pollId = readU64LE(data, 72);
     const optionCount = data[80];
 
+    // metadata_hash sits at offset 8 + 102 in the Poll account:
+    //   creator(32) creator_tid(8) poll_id(8) option_count(1)
+    //   option_votes(4*8) total_votes(4) expires_at(8)
+    //   has_expiry(1) created_at(8) → 102 bytes after the disc.
+    const metadataHashB64 = await readBytesAt(
+      new PublicKey(poll),
+      8 + 102,
+      32
+    );
+
     await db.query(
       `INSERT INTO onchain_polls (
-         pda, creator, creator_tid, poll_id, option_count, create_tx_signature
-       ) VALUES ($1, $2, $3, $4, $5, $6)
+         pda, creator, creator_tid, poll_id, option_count,
+         create_tx_signature, metadata_hash
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (pda) DO NOTHING`,
-      [poll, creator, creatorTid.toString(), pollId.toString(), optionCount, txSignature]
+      [
+        poll,
+        creator,
+        creatorTid.toString(),
+        pollId.toString(),
+        optionCount,
+        txSignature,
+        metadataHashB64,
+      ]
     );
     console.log(
       `PollCreated: pda=${poll} creator_tid=${creatorTid} options=${optionCount} tx=${txSignature}`

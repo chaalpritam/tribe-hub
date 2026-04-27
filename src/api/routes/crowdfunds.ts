@@ -92,17 +92,27 @@ export async function crowdfundRoutes(server: FastifyInstance): Promise<void> {
     }
     if (request.query.creator_tid !== undefined) {
       params.push(request.query.creator_tid);
-      filters.push(`creator_tid = $${params.length}`);
+      filters.push(`c.creator_tid = $${params.length}`);
     }
     const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
     params.push(limit, offset);
+    // LEFT JOIN against the off-chain crowdfunds envelope table on
+    // BLAKE3 hash so callers get title / description / image_url /
+    // currency in a single round trip when the indexer has captured
+    // the metadata_hash. NULL columns when not yet available.
     const result = await db.query(
-      `SELECT pda, creator, creator_tid, crowdfund_id, goal_amount,
-              total_pledged, pledge_count, deadline_at, status,
-              created_at, updated_at, create_tx_signature, claim_tx_signature
-       FROM onchain_crowdfunds
+      `SELECT c.pda, c.creator, c.creator_tid, c.crowdfund_id, c.goal_amount,
+              c.total_pledged, c.pledge_count, c.deadline_at, c.status,
+              c.created_at, c.updated_at, c.create_tx_signature,
+              c.claim_tx_signature, c.metadata_hash,
+              cf_off.title       AS off_title,
+              cf_off.description AS off_description,
+              cf_off.image_url   AS off_image_url,
+              cf_off.currency    AS off_currency
+       FROM onchain_crowdfunds c
+       LEFT JOIN crowdfunds cf_off ON cf_off.hash = c.metadata_hash
        ${where}
-       ORDER BY created_at DESC
+       ORDER BY c.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
@@ -114,11 +124,17 @@ export async function crowdfundRoutes(server: FastifyInstance): Promise<void> {
     "/v1/crowdfunds/onchain/:pda",
     async (request, reply) => {
       const result = await db.query(
-        `SELECT pda, creator, creator_tid, crowdfund_id, goal_amount,
-                total_pledged, pledge_count, deadline_at, status,
-                created_at, updated_at, create_tx_signature, claim_tx_signature
-         FROM onchain_crowdfunds
-         WHERE pda = $1`,
+        `SELECT c.pda, c.creator, c.creator_tid, c.crowdfund_id, c.goal_amount,
+                c.total_pledged, c.pledge_count, c.deadline_at, c.status,
+                c.created_at, c.updated_at, c.create_tx_signature,
+                c.claim_tx_signature, c.metadata_hash,
+                cf_off.title       AS off_title,
+                cf_off.description AS off_description,
+                cf_off.image_url   AS off_image_url,
+                cf_off.currency    AS off_currency
+         FROM onchain_crowdfunds c
+         LEFT JOIN crowdfunds cf_off ON cf_off.hash = c.metadata_hash
+         WHERE c.pda = $1`,
         [request.params.pda]
       );
       if (result.rows.length === 0) {

@@ -72,23 +72,31 @@ export async function taskRoutes(server: FastifyInstance): Promise<void> {
     const params: unknown[] = [];
     if (request.query.status !== undefined) {
       params.push(parseInt(request.query.status, 10));
-      filters.push(`status = $${params.length}`);
+      filters.push(`t.status = $${params.length}`);
     }
     if (request.query.creator_tid !== undefined) {
       params.push(request.query.creator_tid);
-      filters.push(`creator_tid = $${params.length}`);
+      filters.push(`t.creator_tid = $${params.length}`);
     }
     const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
     params.push(limit, offset);
+    // LEFT JOIN against the off-chain tasks envelope table on BLAKE3
+    // hash so callers get title / description / reward_text resolved
+    // in a single round trip.
     const result = await db.query(
-      `SELECT pda, creator, creator_tid, task_id, status,
-              reward_amount, claimer, claimer_tid,
-              created_at, claimed_at, completed_at, updated_at,
-              create_tx_signature, claim_tx_signature,
-              complete_tx_signature, cancel_tx_signature
-       FROM onchain_tasks
+      `SELECT t.pda, t.creator, t.creator_tid, t.task_id, t.status,
+              t.reward_amount, t.claimer, t.claimer_tid,
+              t.created_at, t.claimed_at, t.completed_at, t.updated_at,
+              t.create_tx_signature, t.claim_tx_signature,
+              t.complete_tx_signature, t.cancel_tx_signature,
+              t.metadata_hash,
+              tk_off.title       AS off_title,
+              tk_off.description AS off_description,
+              tk_off.reward_text AS off_reward_text
+       FROM onchain_tasks t
+       LEFT JOIN tasks tk_off ON tk_off.hash = t.metadata_hash
        ${where}
-       ORDER BY created_at DESC
+       ORDER BY t.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
@@ -100,13 +108,18 @@ export async function taskRoutes(server: FastifyInstance): Promise<void> {
     "/v1/tasks/onchain/:pda",
     async (request, reply) => {
       const result = await db.query(
-        `SELECT pda, creator, creator_tid, task_id, status,
-                reward_amount, claimer, claimer_tid,
-                created_at, claimed_at, completed_at, updated_at,
-                create_tx_signature, claim_tx_signature,
-                complete_tx_signature, cancel_tx_signature
-         FROM onchain_tasks
-         WHERE pda = $1`,
+        `SELECT t.pda, t.creator, t.creator_tid, t.task_id, t.status,
+                t.reward_amount, t.claimer, t.claimer_tid,
+                t.created_at, t.claimed_at, t.completed_at, t.updated_at,
+                t.create_tx_signature, t.claim_tx_signature,
+                t.complete_tx_signature, t.cancel_tx_signature,
+                t.metadata_hash,
+                tk_off.title       AS off_title,
+                tk_off.description AS off_description,
+                tk_off.reward_text AS off_reward_text
+         FROM onchain_tasks t
+         LEFT JOIN tasks tk_off ON tk_off.hash = t.metadata_hash
+         WHERE t.pda = $1`,
         [request.params.pda]
       );
       if (result.rows.length === 0) {
