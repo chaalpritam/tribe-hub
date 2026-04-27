@@ -116,11 +116,13 @@ export async function tipRoutes(server: FastifyInstance): Promise<void> {
   }>("/v1/tips/onchain/target/:hash", async (request) => {
     const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
     const result = await db.query(
-      `SELECT pda, sender, recipient, sender_tid, recipient_tid,
-              amount, tip_id, tx_signature, created_at
-       FROM onchain_tip_records
-       WHERE target_hash = $1 AND has_target = TRUE
-       ORDER BY created_at DESC
+      `SELECT t.pda, t.sender, t.recipient, t.sender_tid, t.recipient_tid,
+              t.amount, t.tip_id, t.tx_signature, t.created_at,
+              ti.username AS sender_username
+       FROM onchain_tip_records t
+       LEFT JOIN tids ti ON ti.tid = t.sender_tid
+       WHERE t.target_hash = $1 AND t.has_target = TRUE
+       ORDER BY t.created_at DESC
        LIMIT $2`,
       [request.params.hash, limit]
     );
