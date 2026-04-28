@@ -102,6 +102,8 @@ When `dataB64` is **protobuf-encoded**, the hub today verifies the hash but does
 
 The same integrity check runs on the **gossip path** (phase 3.4): incoming gossip envelopes can carry `dataB64`, the receiving hub recomputes blake3 and (for JSON-encoded bytes) projects from the decoded values, and the bytes are persisted in the `signed_envelopes` table so the hub can re-emit them with full integrity to other peers. Pre-3.4 peers don't carry `dataB64` and fall back to the projected fields with no integrity check.
 
+The **DM submit + gossip routes** (`/v1/dm/send`, `/v1/dm/groups`, `/v1/dm/read`, etc.) now share the same envelope baseline as the tweet/reaction submit path via `verifyEnvelopeBaseline`. DM gossip envelopes carry `dataB64` and the receiver recomputes blake3 + (for JSON-encoded bytes) overrides ciphertext / nonce / sender_x25519 / recipient_tid from the decoded body before storage — a tampered relay can no longer substitute a different ciphertext past us.
+
 ## Channels
 
 Every `TWEET_ADD` must carry a non-empty `channel_id`; the submit route rejects empty values. The reserved channel id `"general"` is seeded by migration 013 on startup — it's the protocol-wide default and the target for every tweet that isn't tied to a city or interest group.
