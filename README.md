@@ -234,6 +234,10 @@ pnpm install
 pnpm dev                # http://localhost:4000
 ```
 
+The hub binds to `0.0.0.0:4000`, so other devices on the same Wi-Fi can reach it as `http://<hostname>.local:4000`. From the parent repo, `tribe share` prints the exact URL — and another laptop's tribe-app dev server can be wired up with `tribe link http://yourmac.local:4000`. See the [main README](../Readme.md#cross-device-development-on-one-wi-fi) for the full cross-device dev flow.
+
+CORS is wide-open in development (no `CORS_ORIGINS` set, `NODE_ENV != production`). Production deployments must set an explicit allowlist — the startup validator refuses to boot otherwise.
+
 ## Environment Variables
 
 | Variable | Default | Description |
