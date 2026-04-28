@@ -244,6 +244,12 @@ pnpm dev                # http://localhost:4000
 | `RATE_LIMIT_SUBMIT_MAX` | `30` | `POST /v1/submit` cap per IP per window |
 | `RATE_LIMIT_UPLOAD_MAX` | `10` | `POST /v1/upload` cap per IP per window |
 | `RATE_LIMIT_PEERS_MAX` | `5` | `POST /v1/peers` cap per IP per window |
+| `MESSAGE_MAX_AGE_MS` | `604800000` (7d) | Max age of a signed message timestamp; older messages are rejected |
+| `MESSAGE_MAX_FUTURE_SKEW_MS` | `300000` (5m) | Max clock skew into the future for a signed timestamp |
+| `GOSSIP_MAX_FRAME_BYTES` | `1048576` | Max bytes per gossip WebSocket frame; oversized frames close the connection |
+| `GOSSIP_FRAMES_PER_SEC_PER_PEER` | `100` | Sustained gossip frame rate per peer connection (token-bucket refill) |
+| `GOSSIP_FRAME_BURST` | `200` | Burst capacity for the gossip token bucket |
+| `APP_KEY_NEGATIVE_CACHE_TTL_MS` | `30000` | TTL for caching "no such app key" results to spare RPC budget; `0` disables |
 | `TID_REGISTRY_PROGRAM_ID` | (devnet default) | Override `tid-registry` program ID |
 | `APP_KEY_REGISTRY_PROGRAM_ID` | (devnet default) | Override `app-key-registry` program ID |
 | `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
