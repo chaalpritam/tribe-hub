@@ -24,9 +24,16 @@ const MIN_ACCOUNT_LEN = REVOKED_OFFSET + 1;
 /**
  * In-memory cache of app keys from Solana.
  * Avoids RPC call per message validation.
+ *
+ * Two caches are maintained:
+ *   - `cache`: hits (TID + signer maps to a CachedAppKey)
+ *   - `negativeCache`: misses (TID + signer not found on-chain). Without
+ *     this, a flood of bogus signers would force an RPC call per message
+ *     and burn the hub's RPC budget.
  */
 class AppKeyCache {
   private cache = new Map<string, CachedAppKey>();
+  private negativeCache = new Map<string, number>();
   private connection: Connection;
 
   constructor() {
@@ -45,9 +52,31 @@ class AppKeyCache {
       return !cached.revoked && (cached.expiresAt === 0 || cached.expiresAt > Date.now() / 1000);
     }
 
+    // Negative cache hit — short-circuit without RPC.
+    const negCachedAt = this.negativeCache.get(key);
+    if (
+      config.appKeyNegativeCacheTtlMs > 0 &&
+      negCachedAt !== undefined &&
+      Date.now() - negCachedAt < config.appKeyNegativeCacheTtlMs
+    ) {
+      return false;
+    }
+
     // Cache miss -- fetch from Solana.
     const record = await this.fetchFromChain(tid, signerHex);
-    if (!record) return false;
+    if (!record) {
+      if (config.appKeyNegativeCacheTtlMs > 0) {
+        if (this.negativeCache.size >= MAX_CACHE_SIZE) {
+          const firstKey = this.negativeCache.keys().next().value;
+          if (firstKey) this.negativeCache.delete(firstKey);
+        }
+        this.negativeCache.set(key, Date.now());
+      }
+      return false;
+    }
+
+    // A real on-chain record arrived — clear any stale negative entry.
+    this.negativeCache.delete(key);
 
     // Evict oldest entries if cache is full
     if (this.cache.size >= MAX_CACHE_SIZE) {
@@ -112,7 +141,9 @@ class AppKeyCache {
    * Invalidate a specific key (called on revoke events).
    */
   invalidate(tid: string, signerHex: string): void {
-    this.cache.delete(`${tid}:${signerHex}`);
+    const key = `${tid}:${signerHex}`;
+    this.cache.delete(key);
+    this.negativeCache.delete(key);
   }
 
   /**
@@ -120,10 +151,15 @@ class AppKeyCache {
    */
   clear(): void {
     this.cache.clear();
+    this.negativeCache.clear();
   }
 
   size(): number {
     return this.cache.size;
+  }
+
+  negativeSize(): number {
+    return this.negativeCache.size;
   }
 }
 

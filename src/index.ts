@@ -19,7 +19,10 @@ async function main() {
 
   bindRuntimeMetrics({
     dbPool: db,
-    appKeyCacheSize: () => appKeyCache.size(),
+    appKeyCacheSize: () => ({
+      positive: appKeyCache.size(),
+      negative: appKeyCache.negativeSize(),
+    }),
   });
 
   // 1. Run database migrations

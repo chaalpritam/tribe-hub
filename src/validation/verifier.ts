@@ -20,6 +20,28 @@ function reject(
 }
 
 /**
+ * Reject messages whose signed timestamp is too far in the past or future.
+ * `signedAtMs` is the message's claimed signing time in milliseconds since
+ * epoch. Returns null if the timestamp is in window.
+ */
+function checkTimestampWindow(
+  source: "submit" | "gossip",
+  signedAtMs: number,
+): ValidationResult | null {
+  if (!Number.isFinite(signedAtMs)) {
+    return reject(source, "invalid_timestamp", "Message timestamp is not a finite number");
+  }
+  const now = Date.now();
+  if (signedAtMs > now + config.messageMaxFutureSkewMs) {
+    return reject(source, "timestamp_in_future", "Message timestamp is too far in the future");
+  }
+  if (signedAtMs < now - config.messageMaxAgeMs) {
+    return reject(source, "timestamp_too_old", "Message timestamp is older than the replay window");
+  }
+  return null;
+}
+
+/**
  * Validate a submitted message:
  * 1. Verify ed25519 signature
  * 2. Check app key is valid for the TID
@@ -37,6 +59,11 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
   if (!signatureValid) {
     return reject("submit", "invalid_signature", "Invalid signature");
   }
+
+  // 2a. Reject messages outside the replay window. data.timestamp is unix
+  // seconds in the signed envelope; convert to ms for the window check.
+  const tsCheck = checkTimestampWindow("submit", message.data.timestamp * 1000);
+  if (tsCheck) return tsCheck;
 
   // 3. Verify signer is a valid app key for this TID.
   const signerHex = Buffer.from(signer).toString("hex");
@@ -92,6 +119,15 @@ export async function validateGossipMessage(msg: GossipMessage): Promise<Validat
   if (!signatureValid) {
     return reject("gossip", "invalid_signature", "Invalid signature");
   }
+
+  // Reject messages outside the replay window. Note: a malicious peer can
+  // lie about timestamp without invalidating the signature (the gossip
+  // projection isn't part of the hashed envelope), but honest peers
+  // forward the original timestamp and this still catches replays at
+  // honest hops in the gossip graph.
+  const signedAtMs = Date.parse(msg.timestamp);
+  const tsCheck = checkTimestampWindow("gossip", signedAtMs);
+  if (tsCheck) return tsCheck;
 
   // Verify signer is a valid app key for this TID.
   const signerHex = Buffer.from(signer).toString("hex");

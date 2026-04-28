@@ -37,6 +37,18 @@ export const config = {
   rateLimitSubmitMax: parseInt(process.env.RATE_LIMIT_SUBMIT_MAX || "30", 10),
   rateLimitUploadMax: parseInt(process.env.RATE_LIMIT_UPLOAD_MAX || "10", 10),
   rateLimitPeersMax: parseInt(process.env.RATE_LIMIT_PEERS_MAX || "5", 10),
+  // Replay-window for signed messages. Anything signed more than
+  // MESSAGE_MAX_AGE_MS in the past or MESSAGE_MAX_FUTURE_SKEW_MS in the
+  // future is rejected. Defaults: 7 days / 5 minutes.
+  messageMaxAgeMs: parseInt(process.env.MESSAGE_MAX_AGE_MS || String(7 * 24 * 60 * 60 * 1000), 10),
+  messageMaxFutureSkewMs: parseInt(process.env.MESSAGE_MAX_FUTURE_SKEW_MS || String(5 * 60 * 1000), 10),
+  // Gossip socket abuse controls
+  gossipMaxFrameBytes: parseInt(process.env.GOSSIP_MAX_FRAME_BYTES || String(1024 * 1024), 10),
+  gossipFramesPerSecPerPeer: parseInt(process.env.GOSSIP_FRAMES_PER_SEC_PER_PEER || "100", 10),
+  gossipFrameBurst: parseInt(process.env.GOSSIP_FRAME_BURST || "200", 10),
+  // Negative cache for unknown app keys (defends RPC budget when bogus
+  // signers flood the hub). 0 disables negative caching.
+  appKeyNegativeCacheTtlMs: parseInt(process.env.APP_KEY_NEGATIVE_CACHE_TTL_MS || "30000", 10),
   // Solana log backfill on startup: fetches signatures newer than the
   // saved cursor and replays them through the same handlers as the
   // live subscription. Existing PK constraints in the mirror tables
@@ -83,6 +95,11 @@ export function validateConfig(): ConfigDiagnostics {
     ["BODY_LIMIT_BYTES", config.bodyLimitBytes],
     ["RATE_LIMIT_WINDOW_MS", config.rateLimitWindowMs],
     ["RATE_LIMIT_GLOBAL_MAX", config.rateLimitGlobalMax],
+    ["MESSAGE_MAX_AGE_MS", config.messageMaxAgeMs],
+    ["MESSAGE_MAX_FUTURE_SKEW_MS", config.messageMaxFutureSkewMs],
+    ["GOSSIP_MAX_FRAME_BYTES", config.gossipMaxFrameBytes],
+    ["GOSSIP_FRAMES_PER_SEC_PER_PEER", config.gossipFramesPerSecPerPeer],
+    ["GOSSIP_FRAME_BURST", config.gossipFrameBurst],
   ] as const) {
     if (!Number.isFinite(val) || val <= 0) {
       errors.push(`${key} must be a positive integer (got ${val})`);

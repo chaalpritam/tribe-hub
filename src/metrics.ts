@@ -33,6 +33,13 @@ export const gossipFramesTotal = new Counter({
   registers: [registry],
 });
 
+export const gossipFramesDroppedTotal = new Counter({
+  name: "tribe_hub_gossip_frames_dropped_total",
+  help: "Gossip frames dropped before processing, by reason",
+  labelNames: ["reason"] as const,
+  registers: [registry],
+});
+
 export const gossipMessagesStoredTotal = new Counter({
   name: "tribe_hub_gossip_messages_stored_total",
   help: "Messages successfully stored from gossip, by kind (tweet|dm)",
@@ -64,7 +71,15 @@ let dbPoolGetter: () => DbPoolSnapshot = () => ({
   idleCount: 0,
   waitingCount: 0,
 });
-let appKeyCacheSizeGetter: () => number = () => 0;
+interface AppKeyCacheSizes {
+  positive: number;
+  negative: number;
+}
+
+let appKeyCacheSizeGetter: () => AppKeyCacheSizes = () => ({
+  positive: 0,
+  negative: 0,
+});
 
 export const dbPoolConnections = new Gauge({
   name: "tribe_hub_db_pool_connections",
@@ -81,10 +96,13 @@ export const dbPoolConnections = new Gauge({
 
 export const appKeyCacheSize = new Gauge({
   name: "tribe_hub_app_key_cache_entries",
-  help: "Entries currently held in the app-key cache",
+  help: "Entries in the app-key cache, by kind (positive=on-chain hit, negative=miss)",
+  labelNames: ["kind"] as const,
   registers: [registry],
   collect() {
-    this.set(appKeyCacheSizeGetter());
+    const sizes = appKeyCacheSizeGetter();
+    this.set({ kind: "positive" }, sizes.positive);
+    this.set({ kind: "negative" }, sizes.negative);
   },
 });
 
@@ -106,6 +124,10 @@ export function recordGossipFrame(
   gossipFramesTotal.inc({ direction, type });
 }
 
+export function recordGossipDroppedFrame(reason: string): void {
+  gossipFramesDroppedTotal.inc({ reason });
+}
+
 export function recordValidationRejection(
   source: "submit" | "gossip",
   reason: string,
@@ -115,7 +137,7 @@ export function recordValidationRejection(
 
 interface RuntimeMetricSources {
   dbPool: DbPoolSnapshot;
-  appKeyCacheSize: () => number;
+  appKeyCacheSize: () => AppKeyCacheSizes;
 }
 
 /**

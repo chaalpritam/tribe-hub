@@ -3,6 +3,7 @@ import { config } from "../config";
 import {
   gossipMessagesStoredTotal,
   gossipPeersConnected,
+  recordGossipDroppedFrame,
   recordGossipFrame,
 } from "../metrics";
 import {
@@ -33,6 +34,37 @@ import {
 
 // Connected peers: hubId -> WebSocket
 const connectedPeers = new Map<string, WebSocket>();
+
+/**
+ * Token-bucket frame rate limiter per WebSocket connection. Refills at
+ * config.gossipFramesPerSecPerPeer tokens/sec up to config.gossipFrameBurst.
+ * Used to defend against frame floods from a misbehaving peer before any
+ * expensive work (signature verify, RPC fetch) runs.
+ */
+class FrameBucket {
+  private tokens: number;
+  private lastRefillMs: number;
+  constructor(private capacity: number, private refillPerSec: number) {
+    this.tokens = capacity;
+    this.lastRefillMs = Date.now();
+  }
+  tryConsume(): boolean {
+    const now = Date.now();
+    const elapsedSec = (now - this.lastRefillMs) / 1000;
+    if (elapsedSec > 0) {
+      this.tokens = Math.min(
+        this.capacity,
+        this.tokens + elapsedSec * this.refillPerSec,
+      );
+      this.lastRefillMs = now;
+    }
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+}
 
 /**
  * Get the map of connected peers (for use by other modules).
@@ -141,6 +173,10 @@ export function gossipDmKey(tid: string, x25519Pubkey: string): void {
  */
 export function handlePeerConnection(ws: WebSocket, isOutgoing: boolean): void {
   let peerHubId: string | null = null;
+  const bucket = new FrameBucket(
+    config.gossipFrameBurst,
+    config.gossipFramesPerSecPerPeer,
+  );
 
   // If we initiated the connection, send hello first
   if (isOutgoing) {
@@ -152,6 +188,34 @@ export function handlePeerConnection(ws: WebSocket, isOutgoing: boolean): void {
   }
 
   ws.on("message", async (data: WebSocket.Data) => {
+    // Size guard before JSON.parse — keeps a peer from forcing a multi-MB
+    // parse attempt by sending a single huge frame.
+    const frameLen =
+      typeof data === "string"
+        ? Buffer.byteLength(data)
+        : data instanceof ArrayBuffer
+          ? data.byteLength
+          : Array.isArray(data)
+            ? data.reduce((n, b) => n + b.length, 0)
+            : (data as Buffer).length;
+    if (frameLen > config.gossipMaxFrameBytes) {
+      recordGossipDroppedFrame("oversized");
+      console.warn(
+        `Closing peer ${peerHubId ?? "unknown"}: frame ${frameLen}B exceeds GOSSIP_MAX_FRAME_BYTES (${config.gossipMaxFrameBytes}B)`,
+      );
+      ws.close(1009, "frame too large");
+      return;
+    }
+
+    if (!bucket.tryConsume()) {
+      recordGossipDroppedFrame("rate_limited");
+      console.warn(
+        `Closing peer ${peerHubId ?? "unknown"}: frame rate exceeded ${config.gossipFramesPerSecPerPeer}/s`,
+      );
+      ws.close(1008, "rate limit");
+      return;
+    }
+
     try {
       const msg: GossipEnvelope = JSON.parse(data.toString());
       recordGossipFrame("in", msg.type ?? "unknown");
@@ -159,6 +223,7 @@ export function handlePeerConnection(ws: WebSocket, isOutgoing: boolean): void {
         peerHubId = id;
       });
     } catch (err) {
+      recordGossipDroppedFrame("malformed");
       recordGossipFrame("in", "malformed");
       console.error("Error handling peer message:", err);
     }
