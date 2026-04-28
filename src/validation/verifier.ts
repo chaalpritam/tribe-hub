@@ -1,9 +1,10 @@
 import nacl from "tweetnacl";
+import { hash as blake3Hash } from "blake3";
 import { SubmitMessageRequest, GossipMessage } from "../types";
 import { appKeyCache } from "./app-key-cache";
 import { db } from "../storage/db";
 import { config } from "../config";
-import { recordValidationRejection } from "../metrics";
+import { recordDataB64Status, recordValidationRejection } from "../metrics";
 
 interface ValidationResult {
   valid: boolean;
@@ -17,6 +18,46 @@ function reject(
 ): ValidationResult {
   recordValidationRejection(source, reason);
   return { valid: false, error };
+}
+
+/**
+ * If the request carries dataB64, recompute blake3 over those bytes and
+ * compare to the claimed hash. Returns null on success or when dataB64
+ * is absent (graceful migration). Returns a rejection result on a
+ * decode failure or hash mismatch.
+ */
+function checkDataB64Integrity(
+  source: "submit" | "gossip",
+  dataB64: string | undefined,
+  claimedHashB64: string,
+): ValidationResult | null {
+  if (!dataB64) {
+    recordDataB64Status(source, "absent");
+    return null;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(dataB64, "base64");
+    if (bytes.length === 0) throw new Error("empty");
+  } catch {
+    recordDataB64Status(source, "invalid_base64");
+    return reject(source, "invalid_data_b64", "dataB64 is not valid base64");
+  }
+  const computed = blake3Hash(bytes) as Uint8Array;
+  const claimed = Buffer.from(claimedHashB64, "base64");
+  if (
+    computed.length !== claimed.length ||
+    !Buffer.from(computed).equals(claimed)
+  ) {
+    recordDataB64Status(source, "mismatch");
+    return reject(
+      source,
+      "data_b64_hash_mismatch",
+      "blake3(dataB64) does not match the claimed hash",
+    );
+  }
+  recordDataB64Status(source, "present");
+  return null;
 }
 
 /**
@@ -60,7 +101,18 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
     return reject("submit", "invalid_signature", "Invalid signature");
   }
 
-  // 2a. Reject messages outside the replay window. data.timestamp is unix
+  // 2a. If the client included dataB64, verify the hash recomputes
+  // from those bytes. Catches relay-tampering of (hash, sig) without
+  // a matching dataB64. Absent dataB64 is allowed during the rollout
+  // and reported via the dataB64_status metric.
+  const integrityCheck = checkDataB64Integrity(
+    "submit",
+    message.dataB64,
+    message.hash,
+  );
+  if (integrityCheck) return integrityCheck;
+
+  // 2b. Reject messages outside the replay window. data.timestamp is unix
   // seconds in the signed envelope; convert to ms for the window check.
   const tsCheck = checkTimestampWindow("submit", message.data.timestamp * 1000);
   if (tsCheck) return tsCheck;

@@ -7,6 +7,16 @@ export interface SubmitMessageRequest {
     network: number;
     body: Record<string, unknown>;
   };
+  /**
+   * Base64 of the exact bytes that were hashed by the client. When
+   * present, the hub recomputes blake3(dataB64) and rejects mismatches
+   * — this defends against a relay tampering with the hash/sig pair.
+   * Phase 3.2 keeps this optional during SDK migration; phase 3.3 will
+   * make it required and project routes will decode from these bytes
+   * rather than trusting `data` (which closes the remaining client-side
+   * tamper gap).
+   */
+  dataB64?: string;
   hash: string;      // base64
   signature: string;  // base64
   signer: string;     // base64

@@ -60,6 +60,13 @@ export const validationRejectionsTotal = new Counter({
   registers: [registry],
 });
 
+export const validationDataB64StatusTotal = new Counter({
+  name: "tribe_hub_validation_databytes_status_total",
+  help: "dataB64 integrity status on submit/gossip, by status (present|absent|mismatch|invalid_base64)",
+  labelNames: ["source", "status"] as const,
+  registers: [registry],
+});
+
 interface DbPoolSnapshot {
   totalCount: number;
   idleCount: number;
@@ -133,6 +140,13 @@ export function recordValidationRejection(
   reason: string,
 ): void {
   validationRejectionsTotal.inc({ source, reason });
+}
+
+export function recordDataB64Status(
+  source: "submit" | "gossip",
+  status: "present" | "absent" | "mismatch" | "invalid_base64",
+): void {
+  validationDataB64StatusTotal.inc({ source, status });
 }
 
 interface RuntimeMetricSources {

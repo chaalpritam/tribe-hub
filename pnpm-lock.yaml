@@ -23,6 +23,9 @@ importers:
       '@solana/web3.js':
         specifier: ^1.98.4
         version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      blake3:
+        specifier: 2.1.7
+        version: 2.1.7
       dotenv:
         specifier: ^17.4.0
         version: 17.4.0
@@ -522,6 +525,9 @@ packages:
 
   bintrees@1.0.2:
     resolution: {integrity: sha512-VOMgTMwjAaUG580SXn3LacVgjurrbMme7ZZNYGSSV7mmtY6QQRh0Eg3pwIcntQ77DErK1L0NxkbetjcoXzVwKw==}
+
+  blake3@2.1.7:
+    resolution: {integrity: sha512-5d+TdKJvju96IyEaGJ0eO6CHbckWi+NBrCezGYM/WsnI3R03aLL2TWfsuZSh1rs0fTv/L3ps/r0vykjYurcIwA==}
 
   bn.js@5.2.3:
     resolution: {integrity: sha512-EAcmnPkxpntVL+DS7bO1zhcZNvCkxqtkd0ZY53h06GNQ3DEkkGZ/gKgmDv6DdZQGj9BgfSPKtJJ7Dp1GPP8f7w==}
@@ -1555,6 +1561,8 @@ snapshots:
   base64-js@1.5.1: {}
 
   bintrees@1.0.2: {}
+
+  blake3@2.1.7: {}
 
   bn.js@5.2.3: {}
 
