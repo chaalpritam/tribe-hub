@@ -11,6 +11,7 @@ import {
 } from "../storage/signed-envelopes";
 import { recordDataB64Status } from "../metrics";
 import { decodeProtoToWire } from "../messages/decoder";
+import { config } from "../config";
 
 /**
  * Get hashes of messages we have since a timestamp.
@@ -203,6 +204,10 @@ function conversationIdFor(a: number | string, b: number | string): string {
 function verifyAndOverrideDmDataB64(msg: GossipDm): boolean {
   if (!msg.dataB64) {
     recordDataB64Status("gossip", "absent");
+    if (config.requireDataB64) {
+      console.warn(`Rejected gossip DM ${msg.hash}: dataB64 required (REQUIRE_DATA_B64=true)`);
+      return false;
+    }
     return true;
   }
   let bytes: Buffer;

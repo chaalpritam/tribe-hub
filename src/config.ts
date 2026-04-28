@@ -49,6 +49,11 @@ export const config = {
   // Negative cache for unknown app keys (defends RPC budget when bogus
   // signers flood the hub). 0 disables negative caching.
   appKeyNegativeCacheTtlMs: parseInt(process.env.APP_KEY_NEGATIVE_CACHE_TTL_MS || "30000", 10),
+  // When true, /v1/submit and /v1/dm/* + the gossip ingest path reject
+  // any envelope without dataB64. Default false during the rollout —
+  // flip once `tribe_hub_validation_databytes_status_total{status=absent}`
+  // trends to ~0 in production.
+  requireDataB64: (process.env.REQUIRE_DATA_B64 || "false").toLowerCase() === "true",
   // Solana log backfill on startup: fetches signatures newer than the
   // saved cursor and replays them through the same handlers as the
   // live subscription. Existing PK constraints in the mirror tables

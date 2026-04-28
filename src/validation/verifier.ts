@@ -51,6 +51,16 @@ function checkDataB64Integrity(
 ): DataB64CheckResult {
   if (!dataB64) {
     recordDataB64Status(source, "absent");
+    if (config.requireDataB64) {
+      return {
+        rejection: reject(
+          source,
+          "data_b64_required",
+          "dataB64 is required (REQUIRE_DATA_B64=true)",
+        ),
+        decodedData: null,
+      };
+    }
     return { rejection: null, decodedData: null };
   }
   let bytes: Buffer;
