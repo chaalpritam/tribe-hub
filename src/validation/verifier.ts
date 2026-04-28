@@ -107,7 +107,7 @@ function checkDataB64Integrity(
  * `signedAtMs` is the message's claimed signing time in milliseconds since
  * epoch. Returns null if the timestamp is in window.
  */
-function checkTimestampWindow(
+export function checkTimestampWindow(
   source: "submit" | "gossip",
   signedAtMs: number,
 ): ValidationResult | null {
@@ -125,56 +125,60 @@ function checkTimestampWindow(
 }
 
 /**
- * Validate a submitted message:
- * 1. Verify ed25519 signature
- * 2. Check app key is valid for the TID
- * 3. Check for duplicate hash
- * 4. Validate message body
+ * Run the integrity baseline that every signed-envelope route shares:
+ * signature → dataB64 hash + JSON override → timestamp window → app key.
+ * Per-route concerns (duplicate-hash dedup, body validation) live in the
+ * caller — this is the bare minimum for treating an envelope as
+ * authentic.
+ *
+ * Mutates `message.data` in place when JSON dataB64 is present so the
+ * caller projects from the bytes the signer actually authenticated.
  */
-export async function validateMessage(message: SubmitMessageRequest): Promise<ValidationResult> {
-  // 1. Decode fields.
+export async function verifyEnvelopeBaseline(
+  message: SubmitMessageRequest,
+  source: "submit" | "gossip" = "submit",
+): Promise<ValidationResult> {
   const hash = Buffer.from(message.hash, "base64");
   const signature = Buffer.from(message.signature, "base64");
   const signer = Buffer.from(message.signer, "base64");
 
-  // 2. Verify ed25519 signature over hash.
-  const signatureValid = nacl.sign.detached.verify(hash, signature, signer);
-  if (!signatureValid) {
-    return reject("submit", "invalid_signature", "Invalid signature");
+  if (!nacl.sign.detached.verify(hash, signature, signer)) {
+    return reject(source, "invalid_signature", "Invalid signature");
   }
 
-  // 2a. If the client included dataB64, verify the hash recomputes
-  // from those bytes. When the bytes are JSON we also overwrite
-  // message.data with the decoded version — that's the authentic
-  // payload the signer authenticated, and downstream projection should
-  // run against it rather than the (untrusted) data field on the wire.
-  const integrityCheck = checkDataB64Integrity(
-    "submit",
-    message.dataB64,
-    message.hash,
-  );
+  const integrityCheck = checkDataB64Integrity(source, message.dataB64, message.hash);
   if (integrityCheck.rejection) return integrityCheck.rejection;
   if (integrityCheck.decodedData) {
     message.data = integrityCheck.decodedData;
   }
 
-  // 2b. Reject messages outside the replay window. data.timestamp is unix
-  // seconds in the signed envelope; convert to ms for the window check.
-  const tsCheck = checkTimestampWindow("submit", message.data.timestamp * 1000);
+  const tsCheck = checkTimestampWindow(source, message.data.timestamp * 1000);
   if (tsCheck) return tsCheck;
 
-  // 3. Verify signer is a valid app key for this TID.
   const signerHex = Buffer.from(signer).toString("hex");
   const isValidKey = await appKeyCache.isValid(message.data.tid, signerHex);
   if (!isValidKey) {
     return reject(
-      "submit",
+      source,
       "invalid_app_key",
       "Signer is not a valid app key for this TID",
     );
   }
 
-  // 4. Check for duplicate hash.
+  return { valid: true };
+}
+
+/**
+ * Validate a submitted message:
+ * 1. Baseline (signature, dataB64 integrity, timestamp window, app key)
+ * 2. Duplicate hash check
+ * 3. Per-type body validation (currently TWEET text length only)
+ */
+export async function validateMessage(message: SubmitMessageRequest): Promise<ValidationResult> {
+  const baseline = await verifyEnvelopeBaseline(message, "submit");
+  if (!baseline.valid) return baseline;
+
+  // Check for duplicate hash.
   const dupResult = await db.query(
     `SELECT 1 FROM messages WHERE hash = $1 LIMIT 1`,
     [message.hash]
