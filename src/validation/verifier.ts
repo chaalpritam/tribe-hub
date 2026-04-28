@@ -5,6 +5,7 @@ import { appKeyCache } from "./app-key-cache";
 import { db } from "../storage/db";
 import { config } from "../config";
 import { recordDataB64Status, recordValidationRejection } from "../metrics";
+import { decodeProtoToWire } from "../messages/decoder";
 
 interface ValidationResult {
   valid: boolean;
@@ -94,10 +95,13 @@ function checkDataB64Integrity(
       // hash, so don't reject. Just skip the override.
     }
   } else {
-    // Protobuf-encoded — phase 3.3 verifies the hash but doesn't yet
-    // decode for projection. Tracked so we know when proto traffic
-    // appears and full projection support becomes worth implementing.
-    recordDataB64Status(source, "decoded_proto");
+    // Protobuf-encoded — decode to the snake_case wire shape so route
+    // handlers project from the bytes the signer actually authenticated
+    // (same guarantee as the JSON path).
+    decodedData = decodeProtoToWire(bytes);
+    if (decodedData) {
+      recordDataB64Status(source, "decoded_proto");
+    }
   }
   return { rejection: null, decodedData };
 }

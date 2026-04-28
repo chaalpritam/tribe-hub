@@ -10,6 +10,7 @@ import {
   storeSignedEnvelope,
 } from "../storage/signed-envelopes";
 import { recordDataB64Status } from "../metrics";
+import { decodeProtoToWire } from "../messages/decoder";
 
 /**
  * Get hashes of messages we have since a timestamp.
@@ -225,42 +226,46 @@ function verifyAndOverrideDmDataB64(msg: GossipDm): boolean {
   }
   recordDataB64Status("gossip", "present");
 
+  let decoded: ReturnType<typeof decodeProtoToWire> | null = null;
   if (bytes[0] === 0x7b /* '{' */) {
     try {
       const parsed = JSON.parse(bytes.toString("utf8")) as {
         tid?: number | string;
         timestamp?: number;
-        body?: {
-          recipient_tid?: number | string;
-          ciphertext?: string;
-          nonce?: string;
-          sender_x25519?: string;
-        };
+        body?: Record<string, unknown>;
       };
       if (parsed && typeof parsed === "object" && parsed.body) {
+        decoded = {
+          type: 0,
+          tid: String(parsed.tid ?? msg.senderTid),
+          timestamp: typeof parsed.timestamp === "number" ? parsed.timestamp : Math.floor(Date.parse(msg.timestamp) / 1000),
+          network: 0,
+          body: parsed.body,
+        };
         recordDataB64Status("gossip", "decoded_json");
-        msg.senderTid = String(parsed.tid ?? msg.senderTid);
-        if (typeof parsed.timestamp === "number") {
-          msg.timestamp = new Date(parsed.timestamp * 1000).toISOString();
-        }
-        if (parsed.body.recipient_tid !== undefined) {
-          msg.recipientTid = String(parsed.body.recipient_tid);
-        }
-        if (typeof parsed.body.ciphertext === "string") {
-          msg.ciphertext = parsed.body.ciphertext;
-        }
-        if (typeof parsed.body.nonce === "string") {
-          msg.nonce = parsed.body.nonce;
-        }
-        if (typeof parsed.body.sender_x25519 === "string") {
-          msg.senderX25519 = parsed.body.sender_x25519;
-        }
       }
     } catch {
       // Hash matched but bytes didn't parse — keep wire projection.
     }
   } else {
-    recordDataB64Status("gossip", "decoded_proto");
+    decoded = decodeProtoToWire(bytes);
+    if (decoded) recordDataB64Status("gossip", "decoded_proto");
+  }
+
+  if (decoded) {
+    const body = decoded.body as Record<string, unknown>;
+    msg.senderTid = String(decoded.tid ?? msg.senderTid);
+    if (typeof decoded.timestamp === "number" && decoded.timestamp > 0) {
+      msg.timestamp = new Date(decoded.timestamp * 1000).toISOString();
+    }
+    if (body.recipient_tid !== undefined) {
+      msg.recipientTid = String(body.recipient_tid);
+    }
+    if (typeof body.ciphertext === "string") msg.ciphertext = body.ciphertext;
+    if (typeof body.nonce === "string") msg.nonce = body.nonce;
+    if (typeof body.sender_x25519 === "string") {
+      msg.senderX25519 = body.sender_x25519;
+    }
   }
   return true;
 }
