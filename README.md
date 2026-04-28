@@ -264,6 +264,7 @@ pnpm dev                # http://localhost:4000
 | `GOSSIP_FRAMES_PER_SEC_PER_PEER` | `100` | Sustained gossip frame rate per peer connection (token-bucket refill) |
 | `GOSSIP_FRAME_BURST` | `200` | Burst capacity for the gossip token bucket |
 | `APP_KEY_NEGATIVE_CACHE_TTL_MS` | `30000` | TTL for caching "no such app key" results to spare RPC budget; `0` disables |
+| `REQUIRE_DATA_B64` | `false` | When `true`, reject any submit/gossip envelope that omits `dataB64`. Flip once `tribe_hub_validation_databytes_status_total{status=absent}` trends to ~0 |
 | `TID_REGISTRY_PROGRAM_ID` | (devnet default) | Override `tid-registry` program ID |
 | `APP_KEY_REGISTRY_PROGRAM_ID` | (devnet default) | Override `app-key-registry` program ID |
 | `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
