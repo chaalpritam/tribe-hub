@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { readFileSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { config } from "../config";
 
@@ -14,20 +14,14 @@ db.on("error", (err) => {
 
 export async function runMigrations(): Promise<void> {
   const migrationsDir = join(__dirname, "migrations");
-  const files = [
-    "001_hub.sql",
-    "002_dms.sql",
-    "003_user_data.sql",
-    "004_channels.sql",
-    "005_bookmarks.sql",
-    "006_polls.sql",
-    "007_events.sql",
-    "008_tasks.sql",
-    "009_crowdfunds.sql",
-    "010_tips.sql",
-    "011_group_dms.sql",
-    "012_dm_read_receipts.sql",
-  ];
+  // Enumerate every *.sql file and run them in lexicographic order. The
+  // file names are zero-padded (`001_…`, `024_…`) so sort() matches the
+  // intended sequence, and every migration in this tree uses
+  // CREATE TABLE / ADD COLUMN IF NOT EXISTS so re-running on an existing
+  // DB is a no-op.
+  const files = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
   for (const file of files) {
     try {
       const sql = readFileSync(join(migrationsDir, file), "utf-8");
@@ -37,5 +31,5 @@ export async function runMigrations(): Promise<void> {
       throw err;
     }
   }
-  console.log("Database migrations applied.");
+  console.log(`Database migrations applied (${files.length} files).`);
 }
