@@ -235,13 +235,22 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
     "/v1/dm/conversations/:tid",
     async (request) => {
       const tid = parseInt(request.params.tid, 10);
+      // peer_tid: the OTHER side of the conversation (whichever of tid_a/tid_b
+      // isn't the caller). peer_username + message_count are joined in so
+      // clients don't need a second round-trip to render a conversation list.
       const result = await db.query(
-        `SELECT id,
-                CASE WHEN tid_a = $1 THEN tid_b ELSE tid_a END AS peer_tid,
-                last_message_at
-         FROM dm_conversations
-         WHERE tid_a = $1 OR tid_b = $1
-         ORDER BY last_message_at DESC`,
+        `SELECT
+            c.id,
+            CASE WHEN c.tid_a = $1 THEN c.tid_b ELSE c.tid_a END AS peer_tid,
+            c.last_message_at,
+            t.username AS peer_username,
+            (SELECT COUNT(*)::int FROM dm_messages
+             WHERE conversation_id = c.id) AS message_count
+         FROM dm_conversations c
+         LEFT JOIN tids t
+           ON t.tid = (CASE WHEN c.tid_a = $1 THEN c.tid_b ELSE c.tid_a END)
+         WHERE c.tid_a = $1 OR c.tid_b = $1
+         ORDER BY c.last_message_at DESC`,
         [tid]
       );
       return { conversations: result.rows };
