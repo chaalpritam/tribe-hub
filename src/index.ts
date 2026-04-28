@@ -1,9 +1,11 @@
 import { config, validateConfig } from "./config";
-import { runMigrations } from "./storage/db";
+import { db, runMigrations } from "./storage/db";
 import { startSolanaListener } from "./solana/listener";
 import { startPeerManager } from "./gossip/peer-manager";
 import { buildServer } from "./server";
 import { getPeerCount } from "./gossip/protocol";
+import { bindRuntimeMetrics } from "./metrics";
+import { appKeyCache } from "./validation/app-key-cache";
 
 async function main() {
   const { errors, warnings } = validateConfig();
@@ -14,6 +16,11 @@ async function main() {
   }
 
   console.log(`Starting Tribe Hub [${config.hubId}] (${config.nodeEnv})...`);
+
+  bindRuntimeMetrics({
+    dbPool: db,
+    appKeyCacheSize: () => appKeyCache.size(),
+  });
 
   // 1. Run database migrations
   await runMigrations();

@@ -3,10 +3,20 @@ import { SubmitMessageRequest, GossipMessage } from "../types";
 import { appKeyCache } from "./app-key-cache";
 import { db } from "../storage/db";
 import { config } from "../config";
+import { recordValidationRejection } from "../metrics";
 
 interface ValidationResult {
   valid: boolean;
   error?: string;
+}
+
+function reject(
+  source: "submit" | "gossip",
+  reason: string,
+  error: string,
+): ValidationResult {
+  recordValidationRejection(source, reason);
+  return { valid: false, error };
 }
 
 /**
@@ -25,14 +35,18 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
   // 2. Verify ed25519 signature over hash.
   const signatureValid = nacl.sign.detached.verify(hash, signature, signer);
   if (!signatureValid) {
-    return { valid: false, error: "Invalid signature" };
+    return reject("submit", "invalid_signature", "Invalid signature");
   }
 
   // 3. Verify signer is a valid app key for this TID.
   const signerHex = Buffer.from(signer).toString("hex");
   const isValidKey = await appKeyCache.isValid(message.data.tid, signerHex);
   if (!isValidKey) {
-    return { valid: false, error: "Signer is not a valid app key for this TID" };
+    return reject(
+      "submit",
+      "invalid_app_key",
+      "Signer is not a valid app key for this TID",
+    );
   }
 
   // 4. Check for duplicate hash.
@@ -41,7 +55,7 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
     [message.hash]
   );
   if (dupResult.rowCount !== null && dupResult.rowCount > 0) {
-    return { valid: false, error: "Duplicate message hash" };
+    return reject("submit", "duplicate_hash", "Duplicate message hash");
   }
 
   // 5. Validate tweet body for TWEET_ADD (type 1).
@@ -49,10 +63,14 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
   if (messageType === 1) {
     const body = message.data.body as { text?: string };
     if (!body.text || typeof body.text !== "string") {
-      return { valid: false, error: "Tweet text is required" };
+      return reject("submit", "missing_tweet_text", "Tweet text is required");
     }
     if (body.text.length > config.maxTweetTextLength) {
-      return { valid: false, error: `Tweet text exceeds max length of ${config.maxTweetTextLength} characters` };
+      return reject(
+        "submit",
+        "tweet_text_too_long",
+        `Tweet text exceeds max length of ${config.maxTweetTextLength} characters`,
+      );
     }
   }
 
@@ -72,14 +90,18 @@ export async function validateGossipMessage(msg: GossipMessage): Promise<Validat
   // Verify ed25519 signature over hash.
   const signatureValid = nacl.sign.detached.verify(hash, signature, signer);
   if (!signatureValid) {
-    return { valid: false, error: "Invalid signature" };
+    return reject("gossip", "invalid_signature", "Invalid signature");
   }
 
   // Verify signer is a valid app key for this TID.
   const signerHex = Buffer.from(signer).toString("hex");
   const isValidKey = await appKeyCache.isValid(msg.tid, signerHex);
   if (!isValidKey) {
-    return { valid: false, error: "Signer is not a valid app key for this TID" };
+    return reject(
+      "gossip",
+      "invalid_app_key",
+      "Signer is not a valid app key for this TID",
+    );
   }
 
   return { valid: true };

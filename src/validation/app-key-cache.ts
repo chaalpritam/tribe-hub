@@ -121,6 +121,10 @@ class AppKeyCache {
   clear(): void {
     this.cache.clear();
   }
+
+  size(): number {
+    return this.cache.size;
+  }
 }
 
 export const appKeyCache = new AppKeyCache();

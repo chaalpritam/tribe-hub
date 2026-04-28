@@ -6,6 +6,7 @@ import { config } from "./config";
 import { registerRoutes } from "./api/routes";
 import { handlePeerConnection } from "./gossip/protocol";
 import { addClient } from "./api/ws";
+import { observeHttpRequest, registry as metricsRegistry } from "./metrics";
 
 function buildCorsOptions(): FastifyCorsOptions {
   const allowAll = config.corsOrigins.length === 0 || config.corsOrigins.includes("*");
@@ -25,10 +26,24 @@ export async function buildServer() {
     global: true,
     max: config.rateLimitGlobalMax,
     timeWindow: config.rateLimitWindowMs,
-    // Skip rate limiting for the health check so liveness probes never get 429s.
-    allowList: (req) => req.url === "/health",
+    // Skip rate limiting for liveness probes (/health) and Prometheus
+    // scrapes (/metrics) so monitors never get 429s.
+    allowList: (req) => req.url === "/health" || req.url === "/metrics",
   });
   await server.register(websocket);
+
+  server.addHook("onResponse", async (request, reply) => {
+    const route = request.routeOptions?.url ?? request.url ?? "unknown";
+    // Skip self-instrumentation to avoid scrape feedback loops.
+    if (route === "/metrics") return;
+    const elapsedMs = reply.elapsedTime ?? 0;
+    observeHttpRequest(request.method, route, reply.statusCode, elapsedMs / 1000);
+  });
+
+  server.get("/metrics", async (_request, reply) => {
+    reply.header("Content-Type", metricsRegistry.contentType);
+    return metricsRegistry.metrics();
+  });
 
   server.setErrorHandler((err: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
     const status = err.statusCode ?? 500;

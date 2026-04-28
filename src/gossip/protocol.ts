@@ -1,6 +1,11 @@
 import WebSocket from "ws";
 import { config } from "../config";
 import {
+  gossipMessagesStoredTotal,
+  gossipPeersConnected,
+  recordGossipFrame,
+} from "../metrics";
+import {
   GossipEnvelope,
   HelloPayload,
   HavePayload,
@@ -49,6 +54,7 @@ export function getPeerCount(): number {
 function send(ws: WebSocket, envelope: GossipEnvelope): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(envelope));
+    recordGossipFrame("out", envelope.type);
   }
 }
 
@@ -148,10 +154,12 @@ export function handlePeerConnection(ws: WebSocket, isOutgoing: boolean): void {
   ws.on("message", async (data: WebSocket.Data) => {
     try {
       const msg: GossipEnvelope = JSON.parse(data.toString());
+      recordGossipFrame("in", msg.type ?? "unknown");
       await handlePeerMessage(ws, msg, peerHubId, (id) => {
         peerHubId = id;
       });
     } catch (err) {
+      recordGossipFrame("in", "malformed");
       console.error("Error handling peer message:", err);
     }
   });
@@ -159,6 +167,7 @@ export function handlePeerConnection(ws: WebSocket, isOutgoing: boolean): void {
   ws.on("close", () => {
     if (peerHubId) {
       connectedPeers.delete(peerHubId);
+      gossipPeersConnected.set(connectedPeers.size);
       console.log(`Peer disconnected: ${peerHubId}`);
     }
   });
@@ -190,6 +199,7 @@ async function handlePeerMessage(
 
       setPeerHubId(peerId);
       connectedPeers.set(peerId, ws);
+      gossipPeersConnected.set(connectedPeers.size);
       console.log(`Peer connected: ${peerId}`);
 
       // Send our hello back if we haven't already (incoming connection)
@@ -271,6 +281,7 @@ async function handlePeerMessage(
       }
       if (stored > 0) {
         console.log(`Stored ${stored}/${payload.messages.length} messages from ${msg.hubId}`);
+        gossipMessagesStoredTotal.inc({ kind: "tweet" }, stored);
         await incrementPeerMessageCount(msg.hubId, stored);
 
         // Update sync state
@@ -296,6 +307,7 @@ async function handlePeerMessage(
       }
       if (stored > 0) {
         console.log(`Stored ${stored}/${payload.messages.length} DMs from ${msg.hubId}`);
+        gossipMessagesStoredTotal.inc({ kind: "dm" }, stored);
         await incrementPeerMessageCount(msg.hubId, stored);
       }
       // Don't re-gossip — same loop-prevention rule as tweets.
