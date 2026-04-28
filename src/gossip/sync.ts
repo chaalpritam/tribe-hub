@@ -1,4 +1,5 @@
 import nacl from "tweetnacl";
+import { hash as blake3Hash } from "blake3";
 import { db } from "../storage/db";
 import { GossipMessage, GossipDm } from "../types";
 import { validateGossipMessage } from "../validation/verifier";
@@ -8,6 +9,7 @@ import {
   getSignedEnvelopes,
   storeSignedEnvelope,
 } from "../storage/signed-envelopes";
+import { recordDataB64Status } from "../metrics";
 
 /**
  * Get hashes of messages we have since a timestamp.
@@ -188,21 +190,101 @@ function conversationIdFor(a: number | string, b: number | string): string {
 }
 
 /**
- * Store an encrypted DM received from a peer hub. Verifies the
- * envelope signature + that the signer is a registered app key for
- * the sender TID.
+ * Verify dataB64 against the DM's claimed hash and, when JSON-encoded,
+ * overwrite ciphertext / nonce / sender_x25519 / timestamp / sender_tid /
+ * recipient_tid on `msg` with the decoded values. Returns false on
+ * mismatch (caller should reject); true otherwise (including when
+ * dataB64 is absent — pre-3.4 peers).
+ *
+ * Mirrors checkDataB64Integrity in verifier.ts but for the GossipDm
+ * shape, since the projected DM fields are different from a tweet's.
+ */
+function verifyAndOverrideDmDataB64(msg: GossipDm): boolean {
+  if (!msg.dataB64) {
+    recordDataB64Status("gossip", "absent");
+    return true;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(msg.dataB64, "base64");
+    if (bytes.length === 0) throw new Error("empty");
+  } catch {
+    recordDataB64Status("gossip", "invalid_base64");
+    console.warn(`Rejected gossip DM ${msg.hash}: dataB64 not valid base64`);
+    return false;
+  }
+  const computed = blake3Hash(bytes) as Uint8Array;
+  const claimed = Buffer.from(msg.hash, "base64");
+  if (
+    computed.length !== claimed.length ||
+    !Buffer.from(computed).equals(claimed)
+  ) {
+    recordDataB64Status("gossip", "mismatch");
+    console.warn(`Rejected gossip DM ${msg.hash}: blake3(dataB64) ≠ hash`);
+    return false;
+  }
+  recordDataB64Status("gossip", "present");
+
+  if (bytes[0] === 0x7b /* '{' */) {
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8")) as {
+        tid?: number | string;
+        timestamp?: number;
+        body?: {
+          recipient_tid?: number | string;
+          ciphertext?: string;
+          nonce?: string;
+          sender_x25519?: string;
+        };
+      };
+      if (parsed && typeof parsed === "object" && parsed.body) {
+        recordDataB64Status("gossip", "decoded_json");
+        msg.senderTid = String(parsed.tid ?? msg.senderTid);
+        if (typeof parsed.timestamp === "number") {
+          msg.timestamp = new Date(parsed.timestamp * 1000).toISOString();
+        }
+        if (parsed.body.recipient_tid !== undefined) {
+          msg.recipientTid = String(parsed.body.recipient_tid);
+        }
+        if (typeof parsed.body.ciphertext === "string") {
+          msg.ciphertext = parsed.body.ciphertext;
+        }
+        if (typeof parsed.body.nonce === "string") {
+          msg.nonce = parsed.body.nonce;
+        }
+        if (typeof parsed.body.sender_x25519 === "string") {
+          msg.senderX25519 = parsed.body.sender_x25519;
+        }
+      }
+    } catch {
+      // Hash matched but bytes didn't parse — keep wire projection.
+    }
+  } else {
+    recordDataB64Status("gossip", "decoded_proto");
+  }
+  return true;
+}
+
+/**
+ * Store an encrypted DM received from a peer hub. Mirrors the
+ * /v1/dm/send route's integrity check: signature, dataB64 against
+ * hash, app-key. When dataB64 is JSON we project ciphertext/nonce/
+ * sender_x25519 from the decoded body so a tampered relay can't
+ * substitute a different ciphertext past us.
  */
 export async function storeGossipDm(
   msg: GossipDm,
   fromHubId: string
 ): Promise<boolean> {
-  // Same signature + app-key check the /v1/dm/send route applies.
   try {
     const hash = Buffer.from(msg.hash, "base64");
     const signature = Buffer.from(msg.signature, "base64");
     const signer = Buffer.from(msg.signer, "base64");
     if (!nacl.sign.detached.verify(hash, signature, signer)) {
       console.warn(`Rejected gossip DM ${msg.hash}: bad signature`);
+      return false;
+    }
+    if (!verifyAndOverrideDmDataB64(msg)) {
       return false;
     }
     const signerHex = Buffer.from(signer).toString("hex");
@@ -214,6 +296,10 @@ export async function storeGossipDm(
   } catch (err) {
     console.warn(`Rejected gossip DM ${msg.hash}: verify error`, err);
     return false;
+  }
+
+  if (msg.dataB64) {
+    await storeSignedEnvelope(msg.hash, msg.dataB64);
   }
 
   const conversationId = msg.conversationId ||
@@ -313,13 +399,16 @@ export async function findMissingDmHashes(
 /** Pull DMs by hash for sending in a dm_messages envelope. */
 export async function getDmsByHashes(hashes: string[]): Promise<GossipDm[]> {
   if (hashes.length === 0) return [];
-  const result = await db.query(
-    `SELECT hash, conversation_id, sender_tid, recipient_tid,
-            ciphertext, nonce, sender_x25519, timestamp, signature, signer
-     FROM dm_messages
-     WHERE hash = ANY($1)`,
-    [hashes]
-  );
+  const [result, envelopes] = await Promise.all([
+    db.query(
+      `SELECT hash, conversation_id, sender_tid, recipient_tid,
+              ciphertext, nonce, sender_x25519, timestamp, signature, signer
+       FROM dm_messages
+       WHERE hash = ANY($1)`,
+      [hashes],
+    ),
+    getSignedEnvelopes(hashes),
+  ]);
   return result.rows.map((r: {
     hash: string;
     conversation_id: string;
@@ -343,5 +432,6 @@ export async function getDmsByHashes(hashes: string[]): Promise<GossipDm[]> {
       r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
     signature: r.signature,
     signer: r.signer,
+    dataB64: envelopes.get(r.hash),
   }));
 }

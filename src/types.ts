@@ -87,6 +87,12 @@ export interface GossipDm {
   timestamp: string;
   signature: string;
   signer: string;
+  /**
+   * Base64 of the bytes the signer hashed. Same role as on GossipMessage:
+   * receiver recomputes blake3 and rejects relays that tampered with the
+   * projection. Optional during the rollout — pre-3.4 peers omit it.
+   */
+  dataB64?: string;
 }
 
 export interface DmMessagesPayload {
