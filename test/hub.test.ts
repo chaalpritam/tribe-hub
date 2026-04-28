@@ -147,6 +147,7 @@ describe("POST /v1/submit", () => {
       text: "Hello Tribe!",
       mentions: [],
       embeds: [],
+      channel_id: "general",
     }, testKeyPair);
 
     // Signature is valid (mocked in validateMessage via appKeyCache)
@@ -203,7 +204,7 @@ describe("POST /v1/submit", () => {
   });
 
   it("rejects duplicate message hash", async () => {
-    const message = createSignedMessage(1, "42", { text: "test" }, testKeyPair);
+    const message = createSignedMessage(1, "42", { text: "test", channel_id: "general" }, testKeyPair);
 
     mockIsValid.mockResolvedValueOnce(true);
     // Duplicate check returns a row
@@ -222,7 +223,7 @@ describe("POST /v1/submit", () => {
 
   it("rejects tweet text exceeding max length", async () => {
     const longText = "x".repeat(321);
-    const message = createSignedMessage(1, "42", { text: longText }, testKeyPair);
+    const message = createSignedMessage(1, "42", { text: longText, channel_id: "general" }, testKeyPair);
 
     mockIsValid.mockResolvedValueOnce(true);
     mockQuery.mockResolvedValueOnce({ rowCount: 0, rows: [] });
