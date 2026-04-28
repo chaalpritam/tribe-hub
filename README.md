@@ -90,6 +90,14 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | WS | `/gossip` | Hub-to-hub gossip |
 | WS | `/v1/ws` | Client WebSocket (real-time events) |
 
+## Message integrity (Phase 3.2)
+
+`POST /v1/submit` accepts an optional `dataB64` field — base64 of the exact bytes the client hashed. When present, the hub recomputes `blake3(dataB64)` and rejects the request unless it matches the claimed `hash`. This catches a relay (or compromised intermediary) that tampered with `(hash, signature)` without producing a matching `dataB64`.
+
+`dataB64` is **optional** during the SDK rollout. Status is reported via `tribe_hub_validation_databytes_status_total{status=present|absent|mismatch|invalid_base64}` so operators can watch migration progress before flipping the field to required.
+
+Once every client emits `dataB64`, Phase 3.3 will switch the route handlers to project from the decoded bytes (rather than trusting `message.data` from the request), closing the remaining client-side mismatch gap.
+
 ## Channels
 
 Every `TWEET_ADD` must carry a non-empty `channel_id`; the submit route rejects empty values. The reserved channel id `"general"` is seeded by migration 013 on startup — it's the protocol-wide default and the target for every tweet that isn't tied to a city or interest group.
