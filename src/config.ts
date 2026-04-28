@@ -64,6 +64,7 @@ export const config = {
   programIds: {
     tidRegistry: process.env.TID_REGISTRY_PROGRAM_ID || "4BSmJmRGQWKgioP9DG2bUuRS9U3V6soRauU7Nv6yGvHD",
     appKeyRegistry: process.env.APP_KEY_REGISTRY_PROGRAM_ID || "5LtbFUeAoXWRovGpyWnRJhiCS62XsTYKVErT9kPpv4hN",
+    usernameRegistry: process.env.USERNAME_REGISTRY_PROGRAM_ID || "65oKjSjcGYR61ASzDYczbodz6H8TARtJyQGvb5V9y9W1",
     socialGraph: process.env.SOCIAL_GRAPH_PROGRAM_ID || "8kKnWvbmTjWq5uPePk79RRbQMAXCszNFzHdRwUS4N74w",
     tipRegistry: process.env.TIP_REGISTRY_PROGRAM_ID || "TipReg1111111111111111111111111111111111111",
     crowdfundRegistry: process.env.CROWDFUND_REGISTRY_PROGRAM_ID || "CrowdF11111111111111111111111111111111111111",

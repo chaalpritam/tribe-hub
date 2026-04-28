@@ -115,6 +115,13 @@ const EVENT_DISCRIMINATORS = {
   eventRsvpUpdated: eventDiscriminator("EventRsvpUpdated"),
 };
 
+const USERNAME_DISCRIMINATORS = {
+  usernameRegistered: eventDiscriminator("UsernameRegistered"),
+  usernameRenewed: eventDiscriminator("UsernameRenewed"),
+  usernameTransferred: eventDiscriminator("UsernameTransferred"),
+  usernameReleased: eventDiscriminator("UsernameReleased"),
+};
+
 // --- Byte-level helpers (no BigUInt64LE for browser compat) ---
 
 function readU64LE(buf: Buffer, offset: number): bigint {
@@ -893,6 +900,92 @@ async function processEventEvent(
   }
 }
 
+// --- Username event processor ---
+//
+// Borsh-encoded layout for each event payload (after the 8-byte
+// discriminator):
+//   UsernameRegistered  : u32 len + utf8 username + u64 tid + i64 expiry
+//   UsernameRenewed     : u32 len + utf8 username + u64 tid + i64 new_expiry
+//   UsernameTransferred : u32 len + utf8 username + u64 old_tid + u64 new_tid
+//   UsernameReleased    : u32 len + utf8 username + u64 tid
+//
+// Without this handler the hub's tids.username column stays NULL even
+// after on-chain registration, so every client falls back to "TID #N"
+// instead of showing "alice.tribe".
+
+function readBorshString(
+  buf: Buffer,
+  offset: number,
+): { value: string; next: number } {
+  const len = buf.readUInt32LE(offset);
+  const start = offset + 4;
+  const end = start + len;
+  return { value: buf.subarray(start, end).toString("utf8"), next: end };
+}
+
+async function processUsernameEvent(
+  eventData: string,
+  txSignature: string,
+): Promise<void> {
+  const decoded = Buffer.from(eventData, "base64");
+  const discriminator = decoded.subarray(0, 8);
+  const data = decoded.subarray(8);
+
+  if (discriminator.equals(USERNAME_DISCRIMINATORS.usernameRegistered)) {
+    const { value: username, next } = readBorshString(data, 0);
+    const tid = readU64LE(data, next);
+    await db.query(
+      `UPDATE tids SET username = $2, updated_at = NOW() WHERE tid = $1`,
+      [tid.toString(), username],
+    );
+    console.log(
+      `UsernameRegistered: tid=${tid} username=${username} tx=${txSignature}`,
+    );
+  } else if (discriminator.equals(USERNAME_DISCRIMINATORS.usernameRenewed)) {
+    // Renewal doesn't change ownership — emit a log so an operator can
+    // grep for it but no DB write needed (expiry isn't tracked here).
+    const { value: username, next } = readBorshString(data, 0);
+    const tid = readU64LE(data, next);
+    console.log(
+      `UsernameRenewed: tid=${tid} username=${username} tx=${txSignature}`,
+    );
+  } else if (
+    discriminator.equals(USERNAME_DISCRIMINATORS.usernameTransferred)
+  ) {
+    const { value: username, next } = readBorshString(data, 0);
+    const oldTid = readU64LE(data, next);
+    const newTid = readU64LE(data, next + 8);
+    // Clear the old TID's username before assigning to the new one so
+    // we never end up with two TIDs both claiming the same handle.
+    await db.query(
+      `UPDATE tids SET username = NULL, updated_at = NOW() WHERE tid = $1`,
+      [oldTid.toString()],
+    );
+    await db.query(
+      `UPDATE tids SET username = $2, updated_at = NOW() WHERE tid = $1`,
+      [newTid.toString(), username],
+    );
+    console.log(
+      `UsernameTransferred: ${username} ${oldTid} -> ${newTid} tx=${txSignature}`,
+    );
+  } else if (discriminator.equals(USERNAME_DISCRIMINATORS.usernameReleased)) {
+    const { value: username, next } = readBorshString(data, 0);
+    const tid = readU64LE(data, next);
+    await db.query(
+      `UPDATE tids SET username = NULL, updated_at = NOW()
+       WHERE tid = $1 AND username = $2`,
+      [tid.toString(), username],
+    );
+    console.log(
+      `UsernameReleased: tid=${tid} username=${username} tx=${txSignature}`,
+    );
+  } else {
+    console.warn(
+      `Unknown username event discriminator: ${discriminator.toString("hex")} tx=${txSignature}`,
+    );
+  }
+}
+
 // --- Main listener ---
 
 const RECONNECT_DELAY_MS = 5_000;
@@ -900,6 +993,7 @@ const MAX_RECONNECT_DELAY_MS = 60_000;
 
 const programHandlers = [
   { id: new PublicKey(config.programIds.tidRegistry), handler: processTidEvent },
+  { id: new PublicKey(config.programIds.usernameRegistry), handler: processUsernameEvent },
   { id: new PublicKey(config.programIds.socialGraph), handler: processSocialEvent },
   { id: new PublicKey(config.programIds.tipRegistry), handler: processTipEvent },
   { id: new PublicKey(config.programIds.crowdfundRegistry), handler: processCrowdfundEvent },
