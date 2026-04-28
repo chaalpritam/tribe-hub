@@ -5,6 +5,7 @@ import { userRoutes } from "./users";
 import { socialRoutes } from "./social";
 import { peerRoutes } from "./peers";
 import { healthRoutes } from "./health";
+import { statsRoutes } from "./stats";
 import { uploadRoutes } from "./upload";
 import { dmRoutes } from "./dms";
 import { channelRoutes } from "./channels";
@@ -24,6 +25,7 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(socialRoutes);
   server.register(peerRoutes);
   server.register(healthRoutes);
+  server.register(statsRoutes);
   server.register(uploadRoutes);
   server.register(dmRoutes);
   server.register(channelRoutes);
