@@ -32,6 +32,9 @@ importers:
       pg:
         specifier: ^8.20.0
         version: 8.20.0
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -56,7 +59,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.2
-        version: 4.1.2(@types/node@25.5.2)(vite@8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.2)(esbuild@0.27.7)(tsx@4.21.0))
+        version: 4.1.2(@opentelemetry/api@1.9.1)(@types/node@25.5.2)(vite@8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.2)(esbuild@0.27.7)(tsx@4.21.0))
 
 packages:
 
@@ -286,6 +289,10 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
+    engines: {node: '>=8.0.0'}
+
   '@oxc-project/types@0.122.0':
     resolution: {integrity: sha512-oLAl5kBpV4w69UtFZ9xqcmTi+GENWOcPF7FCrczTiBbmC0ibXxCwyvZGbO39rCVEuLGAZM84DH0pUIyyv/YJzA==}
 
@@ -512,6 +519,9 @@ packages:
 
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
+
+  bintrees@1.0.2:
+    resolution: {integrity: sha512-VOMgTMwjAaUG580SXn3LacVgjurrbMme7ZZNYGSSV7mmtY6QQRh0Eg3pwIcntQ77DErK1L0NxkbetjcoXzVwKw==}
 
   bn.js@5.2.3:
     resolution: {integrity: sha512-EAcmnPkxpntVL+DS7bO1zhcZNvCkxqtkd0ZY53h06GNQ3DEkkGZ/gKgmDv6DdZQGj9BgfSPKtJJ7Dp1GPP8f7w==}
@@ -868,6 +878,10 @@ packages:
   process-warning@5.0.0:
     resolution: {integrity: sha512-a39t9ApHNx2L4+HBnQKqxxHNs1r7KF+Intd8Q/g1bUh6q0WIp9voPXJ/x0j+ZL45KF1pJd9+q2jLIRMfvEshkA==}
 
+  prom-client@15.1.3:
+    resolution: {integrity: sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==}
+    engines: {node: ^16 || ^18 || >=20}
+
   quick-format-unescaped@4.0.4:
     resolution: {integrity: sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==}
 
@@ -962,6 +976,9 @@ packages:
   superstruct@2.0.2:
     resolution: {integrity: sha512-uV+TFRZdXsqXTL2pRvujROjdZQ4RAlBUS5BTh9IGm+jTqQntYThciG/qu57Gs69yjnVUSqdxF9YLmSnpupBW9A==}
     engines: {node: '>=14.0.0'}
+
+  tdigest@0.1.2:
+    resolution: {integrity: sha512-+G0LLgjjo9BZX2MfdvPfH+MKLCrxlXSYec5DaPYP1fe6Iyhf0/fSmJ0bFiZ1F8BT6cGXl2LpltQptzjXKWEkKA==}
 
   text-encoding-utf-8@1.0.2:
     resolution: {integrity: sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg==}
@@ -1316,6 +1333,8 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
+  '@opentelemetry/api@1.9.1': {}
+
   '@oxc-project/types@0.122.0': {}
 
   '@pinojs/redact@0.4.0': {}
@@ -1534,6 +1553,8 @@ snapshots:
       safe-buffer: 5.2.1
 
   base64-js@1.5.1: {}
+
+  bintrees@1.0.2: {}
 
   bn.js@5.2.3: {}
 
@@ -1896,6 +1917,11 @@ snapshots:
 
   process-warning@5.0.0: {}
 
+  prom-client@15.1.3:
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      tdigest: 0.1.2
+
   quick-format-unescaped@4.0.4: {}
 
   readable-stream@3.6.2:
@@ -1995,6 +2021,10 @@ snapshots:
 
   superstruct@2.0.2: {}
 
+  tdigest@0.1.2:
+    dependencies:
+      bintrees: 1.0.2
+
   text-encoding-utf-8@1.0.2: {}
 
   thread-stream@4.0.0:
@@ -2058,7 +2088,7 @@ snapshots:
       - '@emnapi/core'
       - '@emnapi/runtime'
 
-  vitest@4.1.2(@types/node@25.5.2)(vite@8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.2)(esbuild@0.27.7)(tsx@4.21.0)):
+  vitest@4.1.2(@opentelemetry/api@1.9.1)(@types/node@25.5.2)(vite@8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.2)(esbuild@0.27.7)(tsx@4.21.0)):
     dependencies:
       '@vitest/expect': 4.1.2
       '@vitest/mocker': 4.1.2(vite@8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.2)(esbuild@0.27.7)(tsx@4.21.0))
@@ -2081,6 +2111,7 @@ snapshots:
       vite: 8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.2)(esbuild@0.27.7)(tsx@4.21.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
+      '@opentelemetry/api': 1.9.1
       '@types/node': 25.5.2
     transitivePeerDependencies:
       - msw
