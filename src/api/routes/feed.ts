@@ -15,6 +15,10 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
       FROM messages m
       LEFT JOIN tids t ON t.tid = m.tid
       WHERE m.type = 1
+        AND NOT EXISTS (
+          SELECT 1 FROM messages r
+          WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+        )
     `;
     if (cursor) {
       query += ` AND m.timestamp < $2`;
@@ -44,6 +48,10 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
       FROM messages m
       LEFT JOIN tids t ON t.tid = m.tid
       WHERE m.tid = $1 AND m.type = 1
+        AND NOT EXISTS (
+          SELECT 1 FROM messages r
+          WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+        )
     `;
     if (cursor) {
       query += ` AND m.timestamp < $3`;
@@ -64,7 +72,11 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
               m.received_from, t.username
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
-       WHERE m.hash = $1`,
+       WHERE m.hash = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM messages r
+           WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+         )`,
       [request.params.hash]
     );
     if (result.rows.length === 0) {
@@ -91,6 +103,10 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.type = 1 AND m.text ILIKE $1
+         AND NOT EXISTS (
+           SELECT 1 FROM messages r
+           WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+         )
        ORDER BY m.timestamp DESC LIMIT $2`,
       [`%${q}%`, limit]
     );
@@ -197,6 +213,10 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.channel_id = $1 AND m.type = 1
+         AND NOT EXISTS (
+           SELECT 1 FROM messages r
+           WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+         )
        ORDER BY m.timestamp DESC LIMIT $2`,
       [request.params.channelId, limit]
     );
@@ -216,6 +236,10 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.parent_hash = $1 AND m.type = 1
+         AND NOT EXISTS (
+           SELECT 1 FROM messages r
+           WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+         )
        ORDER BY m.timestamp ASC LIMIT $2`,
       [hash, limit]
     );
