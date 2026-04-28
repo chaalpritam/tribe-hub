@@ -20,20 +20,37 @@ function reject(
   return { valid: false, error };
 }
 
+interface DataB64CheckResult {
+  rejection: ValidationResult | null;
+  /**
+   * Authentic MessageData decoded from dataB64, when the bytes were
+   * JSON-encoded. Callers should overwrite request.data with this so
+   * downstream projection runs against the bytes the signer actually
+   * authenticated, not against whatever `data` field rode along on
+   * the wire. Null when dataB64 was absent or proto-encoded (proto
+   * decoding is a follow-up — phase 3.3 stops at JSON).
+   */
+  decodedData: SubmitMessageRequest["data"] | null;
+}
+
 /**
  * If the request carries dataB64, recompute blake3 over those bytes and
- * compare to the claimed hash. Returns null on success or when dataB64
- * is absent (graceful migration). Returns a rejection result on a
- * decode failure or hash mismatch.
+ * compare to the claimed hash. When the bytes are JSON (first byte '{'),
+ * also parse them and surface the result so the caller can overwrite
+ * request.data with the authentic, blake3-bound version.
+ *
+ * Sniffing JSON vs protobuf by first byte: JSON envelopes start with
+ * 0x7B ('{'); MessageData protobuf wire format starts with a varint tag
+ * (0x08 for field 1) and never with 0x7B.
  */
 function checkDataB64Integrity(
   source: "submit" | "gossip",
   dataB64: string | undefined,
   claimedHashB64: string,
-): ValidationResult | null {
+): DataB64CheckResult {
   if (!dataB64) {
     recordDataB64Status(source, "absent");
-    return null;
+    return { rejection: null, decodedData: null };
   }
   let bytes: Buffer;
   try {
@@ -41,7 +58,10 @@ function checkDataB64Integrity(
     if (bytes.length === 0) throw new Error("empty");
   } catch {
     recordDataB64Status(source, "invalid_base64");
-    return reject(source, "invalid_data_b64", "dataB64 is not valid base64");
+    return {
+      rejection: reject(source, "invalid_data_b64", "dataB64 is not valid base64"),
+      decodedData: null,
+    };
   }
   const computed = blake3Hash(bytes) as Uint8Array;
   const claimed = Buffer.from(claimedHashB64, "base64");
@@ -50,14 +70,36 @@ function checkDataB64Integrity(
     !Buffer.from(computed).equals(claimed)
   ) {
     recordDataB64Status(source, "mismatch");
-    return reject(
-      source,
-      "data_b64_hash_mismatch",
-      "blake3(dataB64) does not match the claimed hash",
-    );
+    return {
+      rejection: reject(
+        source,
+        "data_b64_hash_mismatch",
+        "blake3(dataB64) does not match the claimed hash",
+      ),
+      decodedData: null,
+    };
   }
   recordDataB64Status(source, "present");
-  return null;
+
+  let decodedData: SubmitMessageRequest["data"] | null = null;
+  if (bytes[0] === 0x7b /* '{' */) {
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      if (parsed && typeof parsed === "object" && "type" in parsed && "tid" in parsed) {
+        decodedData = parsed as SubmitMessageRequest["data"];
+        recordDataB64Status(source, "decoded_json");
+      }
+    } catch {
+      // dataB64 looked like JSON but didn't parse — bytes still match the
+      // hash, so don't reject. Just skip the override.
+    }
+  } else {
+    // Protobuf-encoded — phase 3.3 verifies the hash but doesn't yet
+    // decode for projection. Tracked so we know when proto traffic
+    // appears and full projection support becomes worth implementing.
+    recordDataB64Status(source, "decoded_proto");
+  }
+  return { rejection: null, decodedData };
 }
 
 /**
@@ -102,15 +144,19 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
   }
 
   // 2a. If the client included dataB64, verify the hash recomputes
-  // from those bytes. Catches relay-tampering of (hash, sig) without
-  // a matching dataB64. Absent dataB64 is allowed during the rollout
-  // and reported via the dataB64_status metric.
+  // from those bytes. When the bytes are JSON we also overwrite
+  // message.data with the decoded version — that's the authentic
+  // payload the signer authenticated, and downstream projection should
+  // run against it rather than the (untrusted) data field on the wire.
   const integrityCheck = checkDataB64Integrity(
     "submit",
     message.dataB64,
     message.hash,
   );
-  if (integrityCheck) return integrityCheck;
+  if (integrityCheck.rejection) return integrityCheck.rejection;
+  if (integrityCheck.decodedData) {
+    message.data = integrityCheck.decodedData;
+  }
 
   // 2b. Reject messages outside the replay window. data.timestamp is unix
   // seconds in the signed envelope; convert to ms for the window check.

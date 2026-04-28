@@ -144,7 +144,13 @@ export function recordValidationRejection(
 
 export function recordDataB64Status(
   source: "submit" | "gossip",
-  status: "present" | "absent" | "mismatch" | "invalid_base64",
+  status:
+    | "present"
+    | "absent"
+    | "mismatch"
+    | "invalid_base64"
+    | "decoded_json"
+    | "decoded_proto",
 ): void {
   validationDataB64StatusTotal.inc({ source, status });
 }
