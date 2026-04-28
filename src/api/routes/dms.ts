@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
-import nacl from "tweetnacl";
 import { db } from "../../storage/db";
-import { appKeyCache } from "../../validation/app-key-cache";
+import { storeSignedEnvelope } from "../../storage/signed-envelopes";
+import { verifyEnvelopeBaseline } from "../../validation/verifier";
 import { SubmitMessageRequest } from "../../types";
 import { gossipDm, gossipDmKey } from "../../gossip/protocol";
 
@@ -46,32 +46,22 @@ interface DmSendBody {
   sender_x25519: string;
 }
 
-interface ValidationResult {
-  valid: boolean;
-  error?: string;
-}
-
 /**
- * Verify the envelope signature + that the signer is a registered app key
- * for the claimed TID. Caller is responsible for any per-route dedup.
+ * DM submit/group/read routes share the same envelope baseline as the
+ * tweet/reaction submit path: signature, dataB64 integrity (with JSON
+ * override), timestamp window, app-key check. Per-route dedup happens
+ * in the route via UNIQUE constraints on the target tables.
+ *
+ * After a baseline pass, persist the signed bytes so we can re-emit
+ * them via gossip with full integrity (phase 3.4 for DMs).
  */
-async function verifyEnvelope(
-  message: SubmitMessageRequest
-): Promise<ValidationResult> {
-  const hash = Buffer.from(message.hash, "base64");
-  const signature = Buffer.from(message.signature, "base64");
-  const signer = Buffer.from(message.signer, "base64");
-
-  if (!nacl.sign.detached.verify(hash, signature, signer)) {
-    return { valid: false, error: "Invalid signature" };
-  }
-  const signerHex = Buffer.from(signer).toString("hex");
-  const isValidKey = await appKeyCache.isValid(message.data.tid, signerHex);
-  if (!isValidKey) {
-    return {
-      valid: false,
-      error: "Signer is not a valid app key for this TID",
-    };
+async function verifyAndPersistEnvelope(
+  message: SubmitMessageRequest,
+): Promise<{ valid: boolean; error?: string }> {
+  const baseline = await verifyEnvelopeBaseline(message, "submit");
+  if (!baseline.valid) return baseline;
+  if (message.dataB64) {
+    await storeSignedEnvelope(message.hash, message.dataB64);
   }
   return { valid: true };
 }
@@ -93,7 +83,7 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
           .status(400)
           .send({ error: "Expected DM_KEY_REGISTER envelope" });
       }
-      const validation = await verifyEnvelope(message);
+      const validation = await verifyAndPersistEnvelope(message);
       if (!validation.valid) {
         return reply.status(400).send({ error: validation.error });
       }
@@ -146,7 +136,7 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
           .status(400)
           .send({ error: "Expected DM_SEND envelope" });
       }
-      const validation = await verifyEnvelope(message);
+      const validation = await verifyAndPersistEnvelope(message);
       if (!validation.valid) {
         return reply.status(400).send({ error: validation.error });
       }
@@ -233,6 +223,7 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
         timestamp: sentAt.toISOString(),
         signature: message.signature,
         signer: message.signer,
+        dataB64: message.dataB64,
       });
 
       return { hash: message.hash, conversation_id: conversationId };
@@ -324,7 +315,7 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
           .status(400)
           .send({ error: "Expected DM_GROUP_CREATE envelope" });
       }
-      const validation = await verifyEnvelope(message);
+      const validation = await verifyAndPersistEnvelope(message);
       if (!validation.valid) {
         return reply.status(400).send({ error: validation.error });
       }
@@ -387,7 +378,7 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
           .status(400)
           .send({ error: "Expected DM_GROUP_SEND envelope" });
       }
-      const validation = await verifyEnvelope(message);
+      const validation = await verifyAndPersistEnvelope(message);
       if (!validation.valid) {
         return reply.status(400).send({ error: validation.error });
       }
@@ -552,7 +543,7 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
           .status(400)
           .send({ error: "Expected DM_READ envelope" });
       }
-      const validation = await verifyEnvelope(message);
+      const validation = await verifyAndPersistEnvelope(message);
       if (!validation.valid) {
         return reply.status(400).send({ error: validation.error });
       }
