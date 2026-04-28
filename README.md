@@ -100,6 +100,8 @@ When `dataB64` is **protobuf-encoded**, the hub today verifies the hash but does
 
 `dataB64` is **optional** during the rollout. Status is reported via `tribe_hub_validation_databytes_status_total{status=present|absent|mismatch|invalid_base64|decoded_json|decoded_proto}` so operators can watch migration progress before flipping the field to required.
 
+The same integrity check runs on the **gossip path** (phase 3.4): incoming gossip envelopes can carry `dataB64`, the receiving hub recomputes blake3 and (for JSON-encoded bytes) projects from the decoded values, and the bytes are persisted in the `signed_envelopes` table so the hub can re-emit them with full integrity to other peers. Pre-3.4 peers don't carry `dataB64` and fall back to the projected fields with no integrity check.
+
 ## Channels
 
 Every `TWEET_ADD` must carry a non-empty `channel_id`; the submit route rejects empty values. The reserved channel id `"general"` is seeded by migration 013 on startup — it's the protocol-wide default and the target for every tweet that isn't tied to a city or interest group.
