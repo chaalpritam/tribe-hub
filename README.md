@@ -86,6 +86,7 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | POST | `/v1/upload` | Media upload |
 | GET | `/v1/media/:hash` | Serve uploaded media |
 | GET | `/health` | Hub health |
+| GET | `/metrics` | Prometheus metrics (text format) — scraped at any interval; allowlisted from rate limits |
 | WS | `/gossip` | Hub-to-hub gossip |
 | WS | `/v1/ws` | Client WebSocket (real-time events) |
 
