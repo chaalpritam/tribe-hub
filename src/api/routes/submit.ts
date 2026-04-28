@@ -4,6 +4,7 @@ import { validateMessage } from "../../validation/verifier";
 import { db } from "../../storage/db";
 import { gossipMessage } from "../../gossip/protocol";
 import { broadcastToClients } from "../ws";
+import { config } from "../../config";
 
 import { MessageType } from "../../messages/types";
 
@@ -56,7 +57,14 @@ const ALLOWED_USER_DATA_FIELDS = new Set([
 const MAX_USER_DATA_VALUE_LEN = 500;
 
 export async function submitRoutes(server: FastifyInstance): Promise<void> {
-  server.post<{ Body: SubmitMessageRequest }>("/v1/submit", async (request, reply) => {
+  server.post<{ Body: SubmitMessageRequest }>("/v1/submit", {
+    config: {
+      rateLimit: {
+        max: config.rateLimitSubmitMax,
+        timeWindow: config.rateLimitWindowMs,
+      },
+    },
+  }, async (request, reply) => {
     const message = request.body;
 
     // Validate message signature, app key, dedup

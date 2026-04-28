@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import multipart from "@fastify/multipart";
 import { mediaStore } from "../../storage/media-store";
+import { config } from "../../config";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -10,7 +11,14 @@ export async function uploadRoutes(server: FastifyInstance): Promise<void> {
     limits: { fileSize: MAX_FILE_SIZE },
   });
 
-  server.post("/v1/upload", async (request, reply) => {
+  server.post("/v1/upload", {
+    config: {
+      rateLimit: {
+        max: config.rateLimitUploadMax,
+        timeWindow: config.rateLimitWindowMs,
+      },
+    },
+  }, async (request, reply) => {
     const file = await request.file();
     if (!file) {
       return reply.status(400).send({ error: "No file provided" });

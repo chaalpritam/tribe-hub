@@ -32,7 +32,14 @@ export async function peerRoutes(server: FastifyInstance): Promise<void> {
   // Manually add a peer
   server.post<{
     Body: { url: string };
-  }>("/v1/peers", async (request, reply) => {
+  }>("/v1/peers", {
+    config: {
+      rateLimit: {
+        max: config.rateLimitPeersMax,
+        timeWindow: config.rateLimitWindowMs,
+      },
+    },
+  }, async (request, reply) => {
     const { url } = request.body || {};
     if (!url) {
       return reply.status(400).send({ error: "url is required" });
