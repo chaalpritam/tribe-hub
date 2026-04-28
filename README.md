@@ -96,7 +96,7 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 
 When `dataB64` is **JSON-encoded** (first byte `{`), the hub also parses it and uses the decoded value as the authoritative `message.data`, ignoring whatever `data` field rode along on the wire. That closes the client-side `data ≠ dataB64` attack: even a client that builds a malicious `data` field is forced to project from the bytes the signer actually authenticated.
 
-When `dataB64` is **protobuf-encoded**, the hub today verifies the hash but doesn't decode for projection — proto-decode + camelCase→snake_case conversion is a follow-up. The protobuf path is tracked separately in metrics so the work can be scheduled once SDK traffic shows up in production.
+When `dataB64` is **protobuf-encoded**, the hub decodes via the vendored `tribe-sdk` proto schema and converts the camelCase fields back to the snake_case wire shape so the same projection-from-decoded-bytes path runs. Status is reported via `decoded_proto`. JSON and proto paths now have parity for SDK-style and tribe-app-style traffic.
 
 `dataB64` is **optional** during the rollout. Status is reported via `tribe_hub_validation_databytes_status_total{status=present|absent|mismatch|invalid_base64|decoded_json|decoded_proto}` so operators can watch migration progress before flipping the field to required.
 
