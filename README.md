@@ -90,13 +90,15 @@ A hub is a node on the Tribe network. Anyone can run one. Hubs sync with each ot
 | WS | `/gossip` | Hub-to-hub gossip |
 | WS | `/v1/ws` | Client WebSocket (real-time events) |
 
-## Message integrity (Phase 3.2)
+## Message integrity
 
 `POST /v1/submit` accepts an optional `dataB64` field — base64 of the exact bytes the client hashed. When present, the hub recomputes `blake3(dataB64)` and rejects the request unless it matches the claimed `hash`. This catches a relay (or compromised intermediary) that tampered with `(hash, signature)` without producing a matching `dataB64`.
 
-`dataB64` is **optional** during the SDK rollout. Status is reported via `tribe_hub_validation_databytes_status_total{status=present|absent|mismatch|invalid_base64}` so operators can watch migration progress before flipping the field to required.
+When `dataB64` is **JSON-encoded** (first byte `{`), the hub also parses it and uses the decoded value as the authoritative `message.data`, ignoring whatever `data` field rode along on the wire. That closes the client-side `data ≠ dataB64` attack: even a client that builds a malicious `data` field is forced to project from the bytes the signer actually authenticated.
 
-Once every client emits `dataB64`, Phase 3.3 will switch the route handlers to project from the decoded bytes (rather than trusting `message.data` from the request), closing the remaining client-side mismatch gap.
+When `dataB64` is **protobuf-encoded**, the hub today verifies the hash but doesn't decode for projection — proto-decode + camelCase→snake_case conversion is a follow-up. The protobuf path is tracked separately in metrics so the work can be scheduled once SDK traffic shows up in production.
+
+`dataB64` is **optional** during the rollout. Status is reported via `tribe_hub_validation_databytes_status_total{status=present|absent|mismatch|invalid_base64|decoded_json|decoded_proto}` so operators can watch migration progress before flipping the field to required.
 
 ## Channels
 
