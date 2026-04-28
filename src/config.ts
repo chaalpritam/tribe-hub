@@ -1,6 +1,10 @@
 import "dotenv/config";
 
+const NODE_ENV = process.env.NODE_ENV || "development";
+
 export const config = {
+  nodeEnv: NODE_ENV,
+  isProduction: NODE_ENV === "production",
   port: parseInt(process.env.PORT || "4000", 10),
   hubId: process.env.HUB_ID || `hub-${Math.random().toString(36).slice(2, 8)}`,
   solanaRpcUrl: process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
@@ -18,6 +22,21 @@ export const config = {
   // Validation settings
   maxTweetTextLength: parseInt(process.env.MAX_TWEET_TEXT_LENGTH || "320", 10),
   appKeyCacheTtlMs: parseInt(process.env.APP_KEY_CACHE_TTL_MS || "60000", 10),
+  // HTTP server hardening
+  // Comma-separated list of allowed CORS origins. Empty string or "*" allows all
+  // (only recommended for development). Production deployments should set an
+  // explicit allowlist, e.g. CORS_ORIGINS=https://tribeapp.wtf,https://app.tribe.so
+  corsOrigins: (process.env.CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
+  // Max JSON body size in bytes (default 1 MiB). Tweets are short; large bodies
+  // mostly indicate abuse. Uploads use a separate multipart pipeline.
+  bodyLimitBytes: parseInt(process.env.BODY_LIMIT_BYTES || String(1024 * 1024), 10),
+  // Rate limit window applies to each client IP per route. Global cap is a
+  // safety net; write routes apply tighter caps via their own route options.
+  rateLimitGlobalMax: parseInt(process.env.RATE_LIMIT_GLOBAL_MAX || "300", 10),
+  rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10),
+  rateLimitSubmitMax: parseInt(process.env.RATE_LIMIT_SUBMIT_MAX || "30", 10),
+  rateLimitUploadMax: parseInt(process.env.RATE_LIMIT_UPLOAD_MAX || "10", 10),
+  rateLimitPeersMax: parseInt(process.env.RATE_LIMIT_PEERS_MAX || "5", 10),
   // Solana log backfill on startup: fetches signatures newer than the
   // saved cursor and replays them through the same handlers as the
   // live subscription. Existing PK constraints in the mirror tables
@@ -38,3 +57,37 @@ export const config = {
     eventRegistry: process.env.EVENT_REGISTRY_PROGRAM_ID || "D2Gt2qkNAa8gZAmvqt3PWH39ydBL1cpwuXqeogkCoPRk",
   },
 };
+
+export interface ConfigDiagnostics {
+  errors: string[];
+  warnings: string[];
+}
+
+export function validateConfig(): ConfigDiagnostics {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!process.env.DATABASE_URL && config.isProduction) {
+    errors.push("DATABASE_URL must be set in production (refusing to use the local default)");
+  }
+  if (config.isProduction && config.corsOrigins.length === 0) {
+    errors.push("CORS_ORIGINS must list at least one origin in production (set to '*' to opt out explicitly)");
+  }
+  if (config.solanaBackfillLimit === 0) {
+    warnings.push("SOLANA_BACKFILL_LIMIT=0 disables on-chain event backfill — recent on-chain state may be missing until a live event arrives");
+  }
+  for (const [key, val] of [
+    ["PORT", config.port],
+    ["GOSSIP_INTERVAL_MS", config.gossipIntervalMs],
+    ["MAX_SYNC_BATCH_SIZE", config.maxSyncBatchSize],
+    ["BODY_LIMIT_BYTES", config.bodyLimitBytes],
+    ["RATE_LIMIT_WINDOW_MS", config.rateLimitWindowMs],
+    ["RATE_LIMIT_GLOBAL_MAX", config.rateLimitGlobalMax],
+  ] as const) {
+    if (!Number.isFinite(val) || val <= 0) {
+      errors.push(`${key} must be a positive integer (got ${val})`);
+    }
+  }
+
+  return { errors, warnings };
+}

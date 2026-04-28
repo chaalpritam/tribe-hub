@@ -1,4 +1,4 @@
-import { config } from "./config";
+import { config, validateConfig } from "./config";
 import { runMigrations } from "./storage/db";
 import { startSolanaListener } from "./solana/listener";
 import { startPeerManager } from "./gossip/peer-manager";
@@ -6,7 +6,14 @@ import { buildServer } from "./server";
 import { getPeerCount } from "./gossip/protocol";
 
 async function main() {
-  console.log(`Starting Tribe Hub [${config.hubId}]...`);
+  const { errors, warnings } = validateConfig();
+  for (const w of warnings) console.warn(`[config] WARNING: ${w}`);
+  if (errors.length > 0) {
+    for (const e of errors) console.error(`[config] ERROR: ${e}`);
+    process.exit(1);
+  }
+
+  console.log(`Starting Tribe Hub [${config.hubId}] (${config.nodeEnv})...`);
 
   // 1. Run database migrations
   await runMigrations();
@@ -21,11 +28,18 @@ async function main() {
   const server = await buildServer();
   await server.listen({ port: config.port, host: "0.0.0.0" });
 
-  console.log(`Tribe Hub [${config.hubId}] running on port ${config.port}`);
-  console.log(`Gossip WebSocket: ws://0.0.0.0:${config.port}/gossip`);
-  console.log(`Client WebSocket: ws://0.0.0.0:${config.port}/v1/ws`);
-  console.log(`Seed peers: ${config.peers.length}`);
-  console.log(`Connected peers: ${getPeerCount()}`);
+  server.log.info(
+    {
+      hubId: config.hubId,
+      port: config.port,
+      gossipUrl: `ws://0.0.0.0:${config.port}/gossip`,
+      clientUrl: `ws://0.0.0.0:${config.port}/v1/ws`,
+      seedPeers: config.peers.length,
+      connectedPeers: getPeerCount(),
+      corsOrigins: config.corsOrigins.length === 0 ? "*" : config.corsOrigins,
+    },
+    "Tribe Hub ready"
+  );
 }
 
 main().catch((err) => {
