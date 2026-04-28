@@ -235,6 +235,14 @@ pnpm dev                # http://localhost:4000
 | `MAX_SYNC_BATCH_SIZE` | `100` | Max messages per sync batch |
 | `MAX_TWEET_TEXT_LENGTH` | `320` | Server-side tweet length cap |
 | `APP_KEY_CACHE_TTL_MS` | `60000` | In-memory app key cache TTL |
+| `NODE_ENV` | `development` | When `production`, missing `DATABASE_URL` / `CORS_ORIGINS` fail boot and 5xx responses hide internal errors |
+| `CORS_ORIGINS` | (empty = allow all) | Comma-separated allowlist, e.g. `https://tribeapp.wtf,https://app.tribe.so`. Use `*` to opt out explicitly in production |
+| `BODY_LIMIT_BYTES` | `1048576` | Max JSON body size (1 MiB). Multipart `/v1/upload` is unaffected |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Rolling window for all rate limits (per-IP) |
+| `RATE_LIMIT_GLOBAL_MAX` | `300` | Global request cap per IP per window (read endpoints) |
+| `RATE_LIMIT_SUBMIT_MAX` | `30` | `POST /v1/submit` cap per IP per window |
+| `RATE_LIMIT_UPLOAD_MAX` | `10` | `POST /v1/upload` cap per IP per window |
+| `RATE_LIMIT_PEERS_MAX` | `5` | `POST /v1/peers` cap per IP per window |
 | `TID_REGISTRY_PROGRAM_ID` | (devnet default) | Override `tid-registry` program ID |
 | `APP_KEY_REGISTRY_PROGRAM_ID` | (devnet default) | Override `app-key-registry` program ID |
 | `SOCIAL_GRAPH_PROGRAM_ID` | (devnet default) | Override `social-graph` program ID |
