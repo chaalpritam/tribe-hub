@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { SubmitMessageRequest, GossipMessage } from "../../types";
 import { validateMessage } from "../../validation/verifier";
 import { db } from "../../storage/db";
+import { storeSignedEnvelope } from "../../storage/signed-envelopes";
 import { gossipMessage } from "../../gossip/protocol";
 import { broadcastToClients } from "../ws";
 import { config } from "../../config";
@@ -766,6 +767,12 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: `Unsupported message type: ${messageType}` });
     }
 
+    // Persist the signed bytes so peers can later WANT them and verify
+    // blake3(data_bytes) themselves (phase 3.4 integrity for gossip).
+    if (message.dataB64) {
+      await storeSignedEnvelope(message.hash, message.dataB64);
+    }
+
     // Gossip to all connected peers (this is a direct submission, so we gossip it)
     const gossipMsg: GossipMessage = {
       hash: message.hash,
@@ -779,6 +786,7 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
       timestamp: new Date(message.data.timestamp * 1000).toISOString(),
       signature: message.signature,
       signer: message.signer,
+      dataB64: message.dataB64,
     };
     gossipMessage(gossipMsg);
 

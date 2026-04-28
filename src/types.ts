@@ -50,6 +50,13 @@ export interface GossipMessage {
   timestamp: string;
   signature: string;
   signer: string;
+  /**
+   * Base64 of the bytes the signer hashed. Optional during the rollout:
+   * pre-3.4 peers don't send it, in which case the receiver falls back
+   * to the projected fields with no integrity check. Post-3.4 peers
+   * include it so receivers can recompute blake3 and reject tampering.
+   */
+  dataB64?: string;
 }
 
 export interface GossipEnvelope {

@@ -204,7 +204,15 @@ export async function validateMessage(message: SubmitMessageRequest): Promise<Va
 
 /**
  * Validate a gossip message (received from a peer hub).
- * Same checks as validateMessage but adapted for the gossip message format.
+ *
+ * When the envelope carries dataB64, recompute blake3 and — for
+ * JSON-encoded bytes — overwrite the projected fields on `msg` with
+ * the values from the decoded MessageData. That's the integrity story
+ * for the gossip path: honest forwarders carry the signed bytes,
+ * receivers project from those bytes, and a tampered projection is
+ * detected before storage.
+ *
+ * Mutates `msg` in place when override happens.
  */
 export async function validateGossipMessage(msg: GossipMessage): Promise<ValidationResult> {
   // Decode fields.
@@ -218,11 +226,23 @@ export async function validateGossipMessage(msg: GossipMessage): Promise<Validat
     return reject("gossip", "invalid_signature", "Invalid signature");
   }
 
-  // Reject messages outside the replay window. Note: a malicious peer can
-  // lie about timestamp without invalidating the signature (the gossip
-  // projection isn't part of the hashed envelope), but honest peers
-  // forward the original timestamp and this still catches replays at
-  // honest hops in the gossip graph.
+  // Verify dataB64 against the hash, and use the decoded JSON data for
+  // projection if present. Pre-3.4 peers omit dataB64 and the gossip
+  // path falls back to trusting the projected fields on the wire.
+  const integrityCheck = checkDataB64Integrity(
+    "gossip",
+    msg.dataB64,
+    msg.hash,
+  );
+  if (integrityCheck.rejection) return integrityCheck.rejection;
+  if (integrityCheck.decodedData) {
+    overrideGossipProjection(msg, integrityCheck.decodedData);
+  }
+
+  // Reject messages outside the replay window. With dataB64 + JSON
+  // override the timestamp comes from the signed bytes; without it
+  // we trust the wire timestamp at our peril (an honest forwarder
+  // preserves it; a malicious peer could lie).
   const signedAtMs = Date.parse(msg.timestamp);
   const tsCheck = checkTimestampWindow("gossip", signedAtMs);
   if (tsCheck) return tsCheck;
@@ -239,4 +259,31 @@ export async function validateGossipMessage(msg: GossipMessage): Promise<Validat
   }
 
   return { valid: true };
+}
+
+/**
+ * Project the JSON-decoded MessageData back onto the GossipMessage
+ * shape the storage layer expects. After this runs, what's stored on
+ * disk matches what the signer hashed — a peer can't ship a tampered
+ * `text` / `channel_id` / `parent_hash` past us.
+ */
+function overrideGossipProjection(
+  msg: GossipMessage,
+  decoded: SubmitMessageRequest["data"],
+): void {
+  const body = (decoded.body ?? {}) as Record<string, unknown>;
+  msg.tid = String(decoded.tid);
+  msg.type = decoded.type;
+  msg.timestamp = new Date(decoded.timestamp * 1000).toISOString();
+  if (typeof body.text === "string") msg.text = body.text;
+  if (typeof body.parent_hash === "string") msg.parentHash = body.parent_hash;
+  if (typeof body.channel_id === "string") msg.channelId = body.channel_id;
+  if (Array.isArray(body.mentions)) {
+    msg.mentions = (body.mentions as unknown[]).map((m) => String(m));
+  }
+  if (Array.isArray(body.embeds)) {
+    msg.embeds = (body.embeds as unknown[]).filter(
+      (e): e is string => typeof e === "string",
+    );
+  }
 }

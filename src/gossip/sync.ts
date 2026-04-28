@@ -4,6 +4,10 @@ import { GossipMessage, GossipDm } from "../types";
 import { validateGossipMessage } from "../validation/verifier";
 import { appKeyCache } from "../validation/app-key-cache";
 import { broadcastToClients } from "../api/ws";
+import {
+  getSignedEnvelopes,
+  storeSignedEnvelope,
+} from "../storage/signed-envelopes";
 
 /**
  * Get hashes of messages we have since a timestamp.
@@ -32,15 +36,20 @@ export async function findMissingHashes(hashes: string[]): Promise<string[]> {
 
 /**
  * Get full messages by hashes, formatted for gossip transmission.
+ * Includes the signed envelope bytes (dataB64) when available so the
+ * receiver can recompute blake3 and reject any tampered projection.
  */
 export async function getMessagesByHashes(hashes: string[]): Promise<GossipMessage[]> {
   if (hashes.length === 0) return [];
 
-  const result = await db.query(
-    `SELECT hash, tid, type, text, parent_hash, channel_id, mentions, embeds, timestamp, signature, signer
-     FROM messages WHERE hash = ANY($1)`,
-    [hashes]
-  );
+  const [result, envelopes] = await Promise.all([
+    db.query(
+      `SELECT hash, tid, type, text, parent_hash, channel_id, mentions, embeds, timestamp, signature, signer
+       FROM messages WHERE hash = ANY($1)`,
+      [hashes],
+    ),
+    getSignedEnvelopes(hashes),
+  ]);
   return result.rows.map((r: {
     hash: string;
     tid: string;
@@ -65,22 +74,30 @@ export async function getMessagesByHashes(hashes: string[]): Promise<GossipMessa
     timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
     signature: r.signature,
     signer: r.signer,
+    dataB64: envelopes.get(r.hash),
   }));
 }
 
 /**
  * Store a message received from a peer (after validation).
  * Returns true if stored, false if invalid or already exists.
+ *
+ * When the gossip envelope carries dataB64, validateGossipMessage
+ * recomputes blake3 and — for JSON-encoded bytes — overrides the
+ * projected fields on `msg` with the authentic decoded values, so
+ * what we persist matches what the signer authenticated.
  */
 export async function storeGossipMessage(msg: GossipMessage, fromHubId: string): Promise<boolean> {
-  // Validate signature and app key
   const validation = await validateGossipMessage(msg);
   if (!validation.valid) {
     console.warn(`Rejected gossip message ${msg.hash}: ${validation.error}`);
     return false;
   }
 
-  // Store (ON CONFLICT = already have it, that's fine)
+  if (msg.dataB64) {
+    await storeSignedEnvelope(msg.hash, msg.dataB64);
+  }
+
   const result = await db.query(
     `INSERT INTO messages (hash, tid, type, text, parent_hash, channel_id, mentions, embeds, timestamp, signature, signer, received_from)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
