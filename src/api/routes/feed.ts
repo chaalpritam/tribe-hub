@@ -201,6 +201,135 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     return { channels: result.rows, query: q };
   });
 
+  // Search polls by question text.
+  server.get<{
+    Querystring: { q: string; limit?: string };
+  }>("/v1/search/polls", async (request, reply) => {
+    const q = request.query.q;
+    if (!q || q.length < 2) {
+      return reply
+        .status(400)
+        .send({ error: "Query must be at least 2 characters" });
+    }
+    if (q.length > 200) {
+      return reply.status(400).send({ error: "Query too long" });
+    }
+    const limit = Math.min(parseInt(request.query.limit || "20", 10), 50);
+    const result = await db.query(
+      `SELECT p.id, p.creator_tid, p.question, p.options, p.expires_at,
+              p.channel_id, p.created_at, t.username AS creator_username,
+              (SELECT COUNT(*) FROM poll_votes pv WHERE pv.poll_id = p.id)
+                AS total_votes
+       FROM polls p
+       LEFT JOIN tids t ON t.tid = p.creator_tid
+       WHERE p.question ILIKE $1
+          OR EXISTS (
+            SELECT 1 FROM unnest(p.options) AS opt WHERE opt ILIKE $1
+          )
+       ORDER BY p.created_at DESC
+       LIMIT $2`,
+      [`%${q}%`, limit]
+    );
+    return { polls: result.rows, query: q };
+  });
+
+  // Search events by title, description, or location text.
+  server.get<{
+    Querystring: { q: string; limit?: string };
+  }>("/v1/search/events", async (request, reply) => {
+    const q = request.query.q;
+    if (!q || q.length < 2) {
+      return reply
+        .status(400)
+        .send({ error: "Query must be at least 2 characters" });
+    }
+    if (q.length > 200) {
+      return reply.status(400).send({ error: "Query too long" });
+    }
+    const limit = Math.min(parseInt(request.query.limit || "20", 10), 50);
+    const result = await db.query(
+      `SELECT e.id, e.creator_tid, e.title, e.description, e.starts_at,
+              e.ends_at, e.location_text, e.image_url, e.channel_id,
+              e.created_at, t.username AS creator_username,
+              (SELECT COUNT(*) FROM event_rsvps r
+                 WHERE r.event_id = e.id AND r.status = 'yes')
+                AS yes_count
+       FROM events e
+       LEFT JOIN tids t ON t.tid = e.creator_tid
+       WHERE e.title ILIKE $1
+          OR e.description ILIKE $1
+          OR e.location_text ILIKE $1
+       ORDER BY e.starts_at DESC
+       LIMIT $2`,
+      [`%${q}%`, limit]
+    );
+    return { events: result.rows, query: q };
+  });
+
+  // Search tasks by title, description, or reward text.
+  server.get<{
+    Querystring: { q: string; limit?: string };
+  }>("/v1/search/tasks", async (request, reply) => {
+    const q = request.query.q;
+    if (!q || q.length < 2) {
+      return reply
+        .status(400)
+        .send({ error: "Query must be at least 2 characters" });
+    }
+    if (q.length > 200) {
+      return reply.status(400).send({ error: "Query too long" });
+    }
+    const limit = Math.min(parseInt(request.query.limit || "20", 10), 50);
+    const result = await db.query(
+      `SELECT tk.id, tk.creator_tid, tk.title, tk.description, tk.reward_text,
+              tk.status, tk.claimed_by_tid, tk.completed_by_tid,
+              tk.channel_id, tk.created_at,
+              t.username AS creator_username
+       FROM tasks tk
+       LEFT JOIN tids t ON t.tid = tk.creator_tid
+       WHERE tk.title ILIKE $1
+          OR tk.description ILIKE $1
+          OR tk.reward_text ILIKE $1
+       ORDER BY tk.created_at DESC
+       LIMIT $2`,
+      [`%${q}%`, limit]
+    );
+    return { tasks: result.rows, query: q };
+  });
+
+  // Search crowdfunds by title or description.
+  server.get<{
+    Querystring: { q: string; limit?: string };
+  }>("/v1/search/crowdfunds", async (request, reply) => {
+    const q = request.query.q;
+    if (!q || q.length < 2) {
+      return reply
+        .status(400)
+        .send({ error: "Query must be at least 2 characters" });
+    }
+    if (q.length > 200) {
+      return reply.status(400).send({ error: "Query too long" });
+    }
+    const limit = Math.min(parseInt(request.query.limit || "20", 10), 50);
+    const result = await db.query(
+      `SELECT cf.id, cf.creator_tid, cf.title, cf.description, cf.goal_amount,
+              cf.currency, cf.deadline_at, cf.image_url, cf.channel_id,
+              cf.created_at, t.username AS creator_username,
+              (SELECT COALESCE(SUM(amount), 0) FROM crowdfund_pledges cp
+                 WHERE cp.crowdfund_id = cf.id) AS pledged_amount,
+              (SELECT COUNT(*) FROM crowdfund_pledges cp
+                 WHERE cp.crowdfund_id = cf.id) AS pledger_count
+       FROM crowdfunds cf
+       LEFT JOIN tids t ON t.tid = cf.creator_tid
+       WHERE cf.title ILIKE $1
+          OR cf.description ILIKE $1
+       ORDER BY cf.created_at DESC
+       LIMIT $2`,
+      [`%${q}%`, limit]
+    );
+    return { crowdfunds: result.rows, query: q };
+  });
+
   // Channel feed
   server.get<{
     Params: { channelId: string };
