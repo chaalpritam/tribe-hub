@@ -75,6 +75,68 @@ export async function notificationRoutes(server: FastifyInstance): Promise<void>
         WHERE m.type = 1 AND m.mentions @> ARRAY[$1::bigint]
           AND m.tid <> $1
       )
+      UNION ALL
+      (
+        -- Votes on my polls.
+        SELECT 'poll_vote' AS type,
+               pv.voter_tid AS actor_tid,
+               pv.poll_id AS target_hash,
+               p.question AS preview,
+               pv.voted_at AS created_at
+        FROM poll_votes pv
+        JOIN polls p ON p.id = pv.poll_id
+        WHERE p.creator_tid = $1 AND pv.voter_tid <> $1
+      )
+      UNION ALL
+      (
+        -- RSVPs on my events.
+        SELECT 'event_rsvp' AS type,
+               r.tid AS actor_tid,
+               r.event_id AS target_hash,
+               (e.title || ' (' || r.status || ')') AS preview,
+               r.rsvped_at AS created_at
+        FROM event_rsvps r
+        JOIN events e ON e.id = r.event_id
+        WHERE e.creator_tid = $1 AND r.tid <> $1
+      )
+      UNION ALL
+      (
+        -- Someone claimed my task.
+        SELECT 'task_claim' AS type,
+               claimed_by_tid AS actor_tid,
+               id AS target_hash,
+               title AS preview,
+               claimed_at AS created_at
+        FROM tasks
+        WHERE creator_tid = $1
+          AND claimed_by_tid IS NOT NULL
+          AND claimed_by_tid <> $1
+      )
+      UNION ALL
+      (
+        -- Someone completed my task.
+        SELECT 'task_complete' AS type,
+               completed_by_tid AS actor_tid,
+               id AS target_hash,
+               title AS preview,
+               completed_at AS created_at
+        FROM tasks
+        WHERE creator_tid = $1
+          AND completed_by_tid IS NOT NULL
+          AND completed_by_tid <> $1
+      )
+      UNION ALL
+      (
+        -- Pledges to my crowdfund.
+        SELECT 'crowdfund_pledge' AS type,
+               cp.pledger_tid AS actor_tid,
+               cp.crowdfund_id AS target_hash,
+               (cf.title || ' · ' || cp.amount::text || ' ' || cp.currency) AS preview,
+               cp.pledged_at AS created_at
+        FROM crowdfund_pledges cp
+        JOIN crowdfunds cf ON cf.id = cp.crowdfund_id
+        WHERE cf.creator_tid = $1 AND cp.pledger_tid <> $1
+      )
       ORDER BY created_at DESC
       LIMIT $2`,
       [tid, limit]
@@ -99,7 +161,22 @@ export async function notificationRoutes(server: FastifyInstance): Promise<void>
                 AND m.tid = $1 AND c.tid <> $1) +
            (SELECT COUNT(*) FROM tips WHERE recipient_tid = $1) +
            (SELECT COUNT(*) FROM messages
-              WHERE type = 1 AND mentions @> ARRAY[$1::bigint] AND tid <> $1)
+              WHERE type = 1 AND mentions @> ARRAY[$1::bigint] AND tid <> $1) +
+           (SELECT COUNT(*) FROM poll_votes pv
+              JOIN polls p ON p.id = pv.poll_id
+              WHERE p.creator_tid = $1 AND pv.voter_tid <> $1) +
+           (SELECT COUNT(*) FROM event_rsvps r
+              JOIN events e ON e.id = r.event_id
+              WHERE e.creator_tid = $1 AND r.tid <> $1) +
+           (SELECT COUNT(*) FROM tasks
+              WHERE creator_tid = $1 AND claimed_by_tid IS NOT NULL
+                AND claimed_by_tid <> $1) +
+           (SELECT COUNT(*) FROM tasks
+              WHERE creator_tid = $1 AND completed_by_tid IS NOT NULL
+                AND completed_by_tid <> $1) +
+           (SELECT COUNT(*) FROM crowdfund_pledges cp
+              JOIN crowdfunds cf ON cf.id = cp.crowdfund_id
+              WHERE cf.creator_tid = $1 AND cp.pledger_tid <> $1)
            AS count`,
         [tid]
       );
