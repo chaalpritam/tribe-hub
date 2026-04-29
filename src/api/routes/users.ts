@@ -133,4 +133,46 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
 
     return { ...result.rows[0], profile };
   });
+
+  // Bulk read of a TID's currently-active reactions. Used by mobile
+  // clients to populate like / heart state on every tweet card in
+  // the feed without N+1 round-trips. A reaction is "active" when a
+  // REACTION_ADD exists with no later REACTION_REMOVE for the same
+  // (tid, parent_hash) — REACTION_REMOVE clears every reaction the
+  // user has on that target, regardless of reaction subtype, so the
+  // remove check doesn't constrain on the subtype field.
+  server.get<{
+    Params: { tid: string };
+    Querystring: { type?: string; limit?: string };
+  }>("/v1/users/:tid/reactions", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "1000", 10), 5000);
+    const filterType = request.query.type;
+    const params: unknown[] = [request.params.tid];
+    let typeClause = "";
+    if (filterType) {
+      params.push(filterType);
+      typeClause = `AND ra.text = $${params.length}`;
+    }
+    params.push(limit);
+    const result = await db.query(
+      `SELECT ra.parent_hash AS target_hash,
+              ra.text AS reaction_type,
+              ra.timestamp AS reacted_at
+       FROM messages ra
+       WHERE ra.type = 3
+         AND ra.tid = $1
+         ${typeClause}
+         AND NOT EXISTS (
+           SELECT 1 FROM messages rr
+           WHERE rr.type = 4
+             AND rr.tid = ra.tid
+             AND rr.parent_hash = ra.parent_hash
+             AND rr.timestamp > ra.timestamp
+         )
+       ORDER BY ra.timestamp DESC
+       LIMIT $${params.length}`,
+      params
+    );
+    return { reactions: result.rows };
+  });
 }
