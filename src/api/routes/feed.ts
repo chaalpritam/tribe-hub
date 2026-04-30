@@ -11,7 +11,9 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const params: (string | number)[] = [limit];
     let query = `
       SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
-             m.mentions, m.embeds, m.timestamp, t.username
+             m.mentions, m.embeds, m.timestamp, t.username,
+             (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
+             (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
       FROM messages m
       LEFT JOIN tids t ON t.tid = m.tid
       WHERE m.type = 1
@@ -44,7 +46,9 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const params: (string | number)[] = [request.params.tid, limit];
     let query = `
       SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
-             m.mentions, m.embeds, m.timestamp, t.username
+             m.mentions, m.embeds, m.timestamp, t.username,
+             (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
+             (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
       FROM messages m
       LEFT JOIN tids t ON t.tid = m.tid
       WHERE m.tid = $1 AND m.type = 1
@@ -69,7 +73,9 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const result = await db.query(
       `SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
               m.mentions, m.embeds, m.timestamp, m.signature, m.signer,
-              m.received_from, t.username
+              m.received_from, t.username,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.hash = $1
@@ -99,7 +105,9 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const limit = Math.min(parseInt(request.query.limit || "20", 10), 100);
     const result = await db.query(
       `SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
-              m.mentions, m.embeds, m.timestamp, t.username
+              m.mentions, m.embeds, m.timestamp, t.username,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.type = 1 AND m.text ILIKE $1
@@ -338,7 +346,9 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const limit = Math.min(parseInt(request.query.limit || "20", 10), 100);
     const result = await db.query(
       `SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
-              m.mentions, m.embeds, m.timestamp, t.username
+              m.mentions, m.embeds, m.timestamp, t.username,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.channel_id = $1 AND m.type = 1
@@ -361,7 +371,9 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const limit = Math.min(parseInt(request.query.limit || "50", 10), 100);
     const result = await db.query(
       `SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
-              m.mentions, m.embeds, m.timestamp, t.username
+              m.mentions, m.embeds, m.timestamp, t.username,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
        FROM messages m
        LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.parent_hash = $1 AND m.type = 1
