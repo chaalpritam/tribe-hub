@@ -10,6 +10,10 @@ export const config = {
   solanaRpcUrl: process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
   solanaWsUrl: process.env.SOLANA_WS_URL || "wss://api.devnet.solana.com",
   databaseUrl: process.env.DATABASE_URL || "postgresql://tribe:tribe@localhost:5436/tribe_hub",
+  // ER server URL for fetching in-flight follow deltas. Empty string
+  // disables the lookup (hub falls back to social_graph counts only).
+  erServerUrl: (process.env.ER_SERVER_URL || "").replace(/\/$/, ""),
+  erServerTimeoutMs: parseInt(process.env.ER_SERVER_TIMEOUT_MS || "1000", 10),
   // Peer hubs to connect to (comma-separated WebSocket URLs)
   peers: (process.env.PEERS || "").split(",").filter(Boolean),
   // Gossip settings

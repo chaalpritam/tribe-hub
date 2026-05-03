@@ -7,6 +7,49 @@ import { config } from "../../config";
 const solanaConnection = new Connection(config.solanaRpcUrl, "confirmed");
 
 /**
+ * Best-effort fetch of in-flight follow / unfollow deltas for a TID
+ * from the ER server. Returns zeros when ER isn't configured, the
+ * request times out, or the response is malformed — the caller falls
+ * back to the social_graph counts alone in those cases. The whole
+ * point is to surface a freshly-clicked Follow before the L1
+ * settlement + indexer pickup completes (~10–60s window).
+ */
+async function fetchErPendingDeltas(
+  tid: string,
+): Promise<{ followingDelta: number; followersDelta: number }> {
+  if (!config.erServerUrl) return { followingDelta: 0, followersDelta: 0 };
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    config.erServerTimeoutMs,
+  );
+  try {
+    const res = await fetch(
+      `${config.erServerUrl}/pending-deltas/${encodeURIComponent(tid)}`,
+      { signal: controller.signal },
+    );
+    if (!res.ok) return { followingDelta: 0, followersDelta: 0 };
+    const body = (await res.json()) as {
+      followingDelta?: number;
+      followersDelta?: number;
+    };
+    return {
+      followingDelta: Number.isFinite(body.followingDelta)
+        ? Number(body.followingDelta)
+        : 0,
+      followersDelta: Number.isFinite(body.followersDelta)
+        ? Number(body.followersDelta)
+        : 0,
+    };
+  } catch {
+    // Timeout or network error — fail open.
+    return { followingDelta: 0, followersDelta: 0 };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * Read a u64 from a buffer at the given offset (little-endian).
  * Uses manual byte-level operations for browser compatibility.
  */
@@ -131,7 +174,22 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
       profile[row.field] = row.value;
     }
 
-    return { ...result.rows[0], profile };
+    // Add in-flight follow / unfollow ops the ER hasn't yet settled
+    // to L1, so the displayed counts move as soon as the user clicks
+    // Follow instead of waiting for the indexer to catch up. ER is
+    // best-effort — if it's down or slow we keep social_graph alone.
+    const row = result.rows[0];
+    const settledFollowing = Number(row.following_count ?? 0);
+    const settledFollowers = Number(row.followers_count ?? 0);
+    const { followingDelta, followersDelta } = await fetchErPendingDeltas(
+      request.params.tid,
+    );
+    return {
+      ...row,
+      following_count: String(Math.max(0, settledFollowing + followingDelta)),
+      followers_count: String(Math.max(0, settledFollowers + followersDelta)),
+      profile,
+    };
   });
 
   // Bulk read of a TID's currently-active reactions. Used by mobile
