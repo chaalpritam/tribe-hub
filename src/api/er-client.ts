@@ -74,3 +74,43 @@ export function mergedCount(
   for (const t of erRemoves) set.delete(t);
   return set.size;
 }
+
+export interface ErOperation {
+  id: string;
+  op_type: "follow" | "unfollow";
+  follower_tid: string;
+  following_tid: string;
+  status: "pending" | "settling" | "settled" | "failed";
+  created_at: string;
+  settled_at: string | null;
+  tx_signature: string | null;
+  error: string | null;
+}
+
+/**
+ * Per-account follow / unfollow operation log from the ER. Used by
+ * the activity feed so the user can see every on-chain follow they
+ * triggered (with a tx signature once settled). Empty list when ER
+ * is unconfigured / unreachable — caller falls back to hub-only.
+ */
+export async function fetchErOperations(tid: string): Promise<ErOperation[]> {
+  if (!config.erServerUrl) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    config.erServerTimeoutMs,
+  );
+  try {
+    const res = await fetch(
+      `${config.erServerUrl}/v1/operations/${encodeURIComponent(tid)}`,
+      { signal: controller.signal },
+    );
+    if (!res.ok) return [];
+    const body = (await res.json()) as { operations?: ErOperation[] };
+    return Array.isArray(body.operations) ? body.operations : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
