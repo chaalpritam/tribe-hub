@@ -281,7 +281,13 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
     if (conv.rows.length === 0) {
       return { messages: [] };
     }
-    if (conv.rows[0].tid_a !== tid && conv.rows[0].tid_b !== tid) {
+    // node-pg returns BIGINT as a string by default — coerce before
+    // comparing to the parseInt'd query param, otherwise "10" !== 10
+    // and every participant gets a 403.
+    if (
+      Number(conv.rows[0].tid_a) !== tid &&
+      Number(conv.rows[0].tid_b) !== tid
+    ) {
       return reply
         .status(403)
         .send({ error: "Not a participant in this conversation" });
