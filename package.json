@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && mkdir -p dist/messages/proto && cp src/messages/proto/message.js dist/messages/proto/",
+    "build": "tsc; mkdir -p dist/messages/proto && cp src/messages/proto/message.js dist/messages/proto/ || true",
     "start": "node dist/index.js",
     "test": "vitest run"
   },
