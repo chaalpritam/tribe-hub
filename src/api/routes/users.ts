@@ -2,93 +2,10 @@ import { FastifyInstance } from "fastify";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { db } from "../../storage/db";
 import { config } from "../../config";
+import { fetchErLinks, mergedCount } from "../er-client";
 
 // Reuse a single connection for backfill requests
 const solanaConnection = new Connection(config.solanaRpcUrl, "confirmed");
-
-interface ErLinks {
-  followingTids: string[];
-  followerTids: string[];
-  unfollowingTids: string[];
-  unfollowerTids: string[];
-}
-
-const EMPTY_ER_LINKS: ErLinks = {
-  followingTids: [],
-  followerTids: [],
-  unfollowingTids: [],
-  unfollowerTids: [],
-};
-
-/**
- * Best-effort fetch of the ER's view of follow / unfollow state for
- * a TID. Returns four arrays the caller can merge with social_graph:
- *
- *   followingTids   – tids this user follows per the ER (pending or
- *                     settled in er_links).
- *   followerTids    – tids that follow this user per the ER.
- *   unfollowingTids – outgoing unfollows that haven't reached the
- *                     hub's social_graph yet (pending unfollow OR
- *                     recent settled unfollow).
- *   unfollowerTids  – the inverse for incoming unfollows.
- *
- * Empty arrays when ER isn't configured, the request times out, or
- * the response is malformed — callers fall back to social_graph
- * alone in those cases. The whole point is to surface a freshly-
- * clicked Follow / Unfollow before the L1 settlement + indexer
- * pickup completes (~10–60s window).
- */
-async function fetchErLinks(tid: string): Promise<ErLinks> {
-  if (!config.erServerUrl) return EMPTY_ER_LINKS;
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    config.erServerTimeoutMs,
-  );
-  try {
-    const res = await fetch(
-      `${config.erServerUrl}/v1/er-links/${encodeURIComponent(tid)}`,
-      { signal: controller.signal },
-    );
-    if (!res.ok) return EMPTY_ER_LINKS;
-    const body = (await res.json()) as Partial<{
-      followingTids: (string | number)[];
-      followerTids: (string | number)[];
-      unfollowingTids: (string | number)[];
-      unfollowerTids: (string | number)[];
-    }>;
-    const toStr = (xs: (string | number)[] | undefined) =>
-      Array.isArray(xs) ? xs.map(String) : [];
-    return {
-      followingTids: toStr(body.followingTids),
-      followerTids: toStr(body.followerTids),
-      unfollowingTids: toStr(body.unfollowingTids),
-      unfollowerTids: toStr(body.unfollowerTids),
-    };
-  } catch {
-    // Timeout or network error — fail open.
-    return EMPTY_ER_LINKS;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-/**
- * Compute (social_graph_set ∪ erAdds) \ erRemoves and return its
- * size. Used twice in /v1/user/:tid — once for following counts
- * (erAdds = followingTids, erRemoves = unfollowingTids) and once
- * for followers (erAdds = followerTids, erRemoves = unfollowerTids).
- */
-function mergedCount(
-  social: string[],
-  erAdds: string[],
-  erRemoves: string[],
-): number {
-  const set = new Set(social);
-  for (const t of erAdds) set.add(t);
-  for (const t of erRemoves) set.delete(t);
-  return set.size;
-}
 
 /**
  * Read a u64 from a buffer at the given offset (little-endian).
