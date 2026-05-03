@@ -6,18 +6,40 @@ import { config } from "../../config";
 // Reuse a single connection for backfill requests
 const solanaConnection = new Connection(config.solanaRpcUrl, "confirmed");
 
+interface ErLinks {
+  followingTids: string[];
+  followerTids: string[];
+  unfollowingTids: string[];
+  unfollowerTids: string[];
+}
+
+const EMPTY_ER_LINKS: ErLinks = {
+  followingTids: [],
+  followerTids: [],
+  unfollowingTids: [],
+  unfollowerTids: [],
+};
+
 /**
- * Best-effort fetch of in-flight follow / unfollow deltas for a TID
- * from the ER server. Returns zeros when ER isn't configured, the
- * request times out, or the response is malformed — the caller falls
- * back to the social_graph counts alone in those cases. The whole
- * point is to surface a freshly-clicked Follow before the L1
- * settlement + indexer pickup completes (~10–60s window).
+ * Best-effort fetch of the ER's view of follow / unfollow state for
+ * a TID. Returns four arrays the caller can merge with social_graph:
+ *
+ *   followingTids   – tids this user follows per the ER (pending or
+ *                     settled in er_links).
+ *   followerTids    – tids that follow this user per the ER.
+ *   unfollowingTids – outgoing unfollows that haven't reached the
+ *                     hub's social_graph yet (pending unfollow OR
+ *                     recent settled unfollow).
+ *   unfollowerTids  – the inverse for incoming unfollows.
+ *
+ * Empty arrays when ER isn't configured, the request times out, or
+ * the response is malformed — callers fall back to social_graph
+ * alone in those cases. The whole point is to surface a freshly-
+ * clicked Follow / Unfollow before the L1 settlement + indexer
+ * pickup completes (~10–60s window).
  */
-async function fetchErPendingDeltas(
-  tid: string,
-): Promise<{ followingDelta: number; followersDelta: number }> {
-  if (!config.erServerUrl) return { followingDelta: 0, followersDelta: 0 };
+async function fetchErLinks(tid: string): Promise<ErLinks> {
+  if (!config.erServerUrl) return EMPTY_ER_LINKS;
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
@@ -25,28 +47,47 @@ async function fetchErPendingDeltas(
   );
   try {
     const res = await fetch(
-      `${config.erServerUrl}/pending-deltas/${encodeURIComponent(tid)}`,
+      `${config.erServerUrl}/v1/er-links/${encodeURIComponent(tid)}`,
       { signal: controller.signal },
     );
-    if (!res.ok) return { followingDelta: 0, followersDelta: 0 };
-    const body = (await res.json()) as {
-      followingDelta?: number;
-      followersDelta?: number;
-    };
+    if (!res.ok) return EMPTY_ER_LINKS;
+    const body = (await res.json()) as Partial<{
+      followingTids: (string | number)[];
+      followerTids: (string | number)[];
+      unfollowingTids: (string | number)[];
+      unfollowerTids: (string | number)[];
+    }>;
+    const toStr = (xs: (string | number)[] | undefined) =>
+      Array.isArray(xs) ? xs.map(String) : [];
     return {
-      followingDelta: Number.isFinite(body.followingDelta)
-        ? Number(body.followingDelta)
-        : 0,
-      followersDelta: Number.isFinite(body.followersDelta)
-        ? Number(body.followersDelta)
-        : 0,
+      followingTids: toStr(body.followingTids),
+      followerTids: toStr(body.followerTids),
+      unfollowingTids: toStr(body.unfollowingTids),
+      unfollowerTids: toStr(body.unfollowerTids),
     };
   } catch {
     // Timeout or network error — fail open.
-    return { followingDelta: 0, followersDelta: 0 };
+    return EMPTY_ER_LINKS;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Compute (social_graph_set ∪ erAdds) \ erRemoves and return its
+ * size. Used twice in /v1/user/:tid — once for following counts
+ * (erAdds = followingTids, erRemoves = unfollowingTids) and once
+ * for followers (erAdds = followerTids, erRemoves = unfollowerTids).
+ */
+function mergedCount(
+  social: string[],
+  erAdds: string[],
+  erRemoves: string[],
+): number {
+  const set = new Set(social);
+  for (const t of erAdds) set.add(t);
+  for (const t of erRemoves) set.delete(t);
+  return set.size;
 }
 
 /**
@@ -174,20 +215,43 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
       profile[row.field] = row.value;
     }
 
-    // Add in-flight follow / unfollow ops the ER hasn't yet settled
-    // to L1, so the displayed counts move as soon as the user clicks
-    // Follow instead of waiting for the indexer to catch up. ER is
-    // best-effort — if it's down or slow we keep social_graph alone.
+    // Pull the social_graph follow lists, then merge with the ER's
+    // view (in-flight follows added, in-flight unfollows subtracted)
+    // so the displayed counts both move on a fresh click AND don't
+    // dip during the indexer-lag window. The simple "social_graph
+    // count + ER delta" approach we used previously dipped to the
+    // pre-click value during the gap between L1 settlement and the
+    // hub indexer picking up the on-chain row.
     const row = result.rows[0];
-    const settledFollowing = Number(row.following_count ?? 0);
-    const settledFollowers = Number(row.followers_count ?? 0);
-    const { followingDelta, followersDelta } = await fetchErPendingDeltas(
-      request.params.tid,
+    const [sgFollowing, sgFollowers, erLinks] = await Promise.all([
+      db.query(
+        `SELECT following_tid FROM social_graph
+         WHERE follower_tid = $1 AND deleted_at IS NULL`,
+        [request.params.tid],
+      ),
+      db.query(
+        `SELECT follower_tid FROM social_graph
+         WHERE following_tid = $1 AND deleted_at IS NULL`,
+        [request.params.tid],
+      ),
+      fetchErLinks(request.params.tid),
+    ]);
+    const sgFollowingTids = sgFollowing.rows.map((r) => String(r.following_tid));
+    const sgFollowerTids = sgFollowers.rows.map((r) => String(r.follower_tid));
+    const followingCount = mergedCount(
+      sgFollowingTids,
+      erLinks.followingTids,
+      erLinks.unfollowingTids,
+    );
+    const followersCount = mergedCount(
+      sgFollowerTids,
+      erLinks.followerTids,
+      erLinks.unfollowerTids,
     );
     return {
       ...row,
-      following_count: String(Math.max(0, settledFollowing + followingDelta)),
-      followers_count: String(Math.max(0, settledFollowers + followersDelta)),
+      following_count: String(followingCount),
+      followers_count: String(followersCount),
       profile,
     };
   });
