@@ -20,7 +20,8 @@ Decentralized hub for TribeEco. Combined tweet storage + Solana event indexer + 
 - `GET /health` — Health check
 - `GET /v1/peers` — List known peers with connection status
 - `POST /v1/peers` — Add a peer at runtime `{ "url": "ws://..." }`
-- `GET /v1/sync/status` — Sync state per peer
+- `GET /v1/sync/status` — Sync state per peer plus our own message + DM totals and a coverage % (= local store / peer total, capped at 100). Probes each peer's `/health` for their total.
+- `POST /v1/sync/trigger` — `{ peer?: "<hub-id>" | "all", sinceMs?: number }`. Calls `broadcastHaveSince` to send a wider "have" frame for everything since `Date.now() - sinceMs` (default 30d) to one connected peer or every connected peer. Used by `tribe sync --peer …`.
 - `GET /gossip` — WebSocket endpoint for hub-to-hub gossip
 - `GET /v1/ws` — WebSocket endpoint for client real-time updates
 
