@@ -79,7 +79,16 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
     const result = await db.query(
       `SELECT f.tid, f.custody_address, f.recovery_address, f.registered_at, f.username,
               (SELECT COUNT(*) FROM social_graph WHERE follower_tid = f.tid AND deleted_at IS NULL) as following_count,
-              (SELECT COUNT(*) FROM social_graph WHERE following_tid = f.tid AND deleted_at IS NULL) as followers_count
+              (SELECT COUNT(*) FROM social_graph WHERE following_tid = f.tid AND deleted_at IS NULL) as followers_count,
+              (SELECT value FROM user_data
+                 WHERE tid = f.tid AND field = 'displayName'
+                 ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data
+                 WHERE tid = f.tid AND field = 'pfpUrl'
+                 ORDER BY timestamp DESC LIMIT 1) AS pfp_url,
+              (SELECT value FROM user_data
+                 WHERE tid = f.tid AND field = 'bio'
+                 ORDER BY timestamp DESC LIMIT 1) AS bio
        FROM tids f
        ORDER BY f.tid DESC
        LIMIT $1 OFFSET $2`,
