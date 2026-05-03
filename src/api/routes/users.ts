@@ -297,4 +297,50 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
     );
     return { reactions: result.rows };
   });
+
+  // Tweets this TID has currently liked (REACTION_ADD with body.type
+  // stored as text='1', no later REACTION_REMOVE on the same target).
+  // Returns full tweet rows joined the same way /v1/feed does so the
+  // frontend can drop the result straight into TweetCard. liked_at
+  // is the reaction timestamp so the tab orders by recency-of-like
+  // rather than recency-of-tweet.
+  server.get<{
+    Params: { tid: string };
+    Querystring: { limit?: string };
+  }>("/v1/users/:tid/likes", async (request) => {
+    const limit = Math.min(parseInt(request.query.limit || "50", 10), 200);
+    const result = await db.query(
+      `SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
+              m.mentions, m.embeds, m.timestamp,
+              t.username,
+              (SELECT value FROM user_data
+                 WHERE tid = m.tid AND field = 'displayName'
+                 ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data
+                 WHERE tid = m.tid AND field = 'pfpUrl'
+                 ORDER BY timestamp DESC LIMIT 1) AS pfp_url,
+              ra.timestamp AS liked_at
+       FROM messages ra
+       JOIN messages m ON m.hash = ra.parent_hash AND m.type = 1
+       LEFT JOIN tids t ON t.tid = m.tid
+       WHERE ra.type = 3
+         AND ra.tid = $1
+         AND ra.text = '1'
+         AND NOT EXISTS (
+           SELECT 1 FROM messages rr
+           WHERE rr.type = 4
+             AND rr.tid = ra.tid
+             AND rr.parent_hash = ra.parent_hash
+             AND rr.timestamp > ra.timestamp
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM messages tr
+           WHERE tr.type = 2 AND tr.tid = m.tid AND tr.text = m.hash
+         )
+       ORDER BY ra.timestamp DESC
+       LIMIT $2`,
+      [request.params.tid, limit]
+    );
+    return { tweets: result.rows };
+  });
 }
