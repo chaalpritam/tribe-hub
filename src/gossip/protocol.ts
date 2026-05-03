@@ -19,12 +19,14 @@ import {
 } from "../types";
 import {
   getMessageHashes,
+  getMessageHashTimestamp,
   getMessagesByHashes,
   findMissingHashes,
   storeGossipMessage,
   storeGossipDm,
   storeGossipDmKey,
   getDmHashes,
+  getDmHashTimestamp,
   getDmsByHashes,
   findMissingDmHashes,
   getLastSyncTime,
@@ -111,6 +113,84 @@ export async function broadcastHave(): Promise<void> {
   for (const [, ws] of connectedPeers) {
     send(ws, envelope);
   }
+}
+
+/**
+ * Send a wider-window "have" frame to one peer (or every connected
+ * peer if peerHubId is null) covering everything since `since`. This
+ * is what `tribe sync --peer …` triggers — the standard gossip tick
+ * only covers the last ~2 intervals so a freshly-added hub would
+ * otherwise have to wait for messages to organically replay or for
+ * the next "hello" handshake.
+ *
+ * Returns the list of peer hub-ids we actually sent to, so the API
+ * can echo it back in the trigger response (helpful for the CLI to
+ * say "blasted to hub-x, hub-y" rather than guess).
+ */
+export async function broadcastHaveSince(
+  peerHubId: string | null,
+  since: Date
+): Promise<string[]> {
+  if (connectedPeers.size === 0) return [];
+
+  const targets: Array<[string, WebSocket]> = peerHubId
+    ? connectedPeers.has(peerHubId)
+      ? [[peerHubId, connectedPeers.get(peerHubId)!]]
+      : []
+    : Array.from(connectedPeers.entries());
+
+  if (targets.length === 0) return [];
+
+  // Walk forward from `since` in batches of MAX_SYNC_BATCH_SIZE so a
+  // 30-day catch-up doesn't get truncated to the first 100 hashes.
+  const sent: string[] = [];
+  for (const [hubId, ws] of targets) {
+    let cursor = since;
+    let total = 0;
+    // Hard cap on iterations to avoid pathological loops; 100 batches *
+    // 100 batch size = 10k message hashes per peer per trigger.
+    for (let i = 0; i < 100; i++) {
+      const hashes = await getMessageHashes(cursor, config.maxSyncBatchSize);
+      if (hashes.length === 0) break;
+      send(ws, {
+        type: "have",
+        hubId: config.hubId,
+        payload: { hashes, since: cursor.toISOString() } as HavePayload,
+      });
+      total += hashes.length;
+      if (hashes.length < config.maxSyncBatchSize) break;
+      // Bump cursor by 1ms; the gossip "have" handler dedupes via
+      // findMissingHashes so the small window overlap is harmless.
+      cursor = new Date(
+        Date.now() - 1, // sentinel — overwritten below by the real ts
+      );
+      // Re-resolve cursor from the timestamp of the last message we
+      // sent so the next batch starts strictly after it.
+      const tsResult = await getMessageHashTimestamp(
+        hashes[hashes.length - 1]
+      );
+      cursor = tsResult ? new Date(tsResult.getTime() + 1) : new Date();
+    }
+
+    // Mirror for DMs.
+    let dmCursor = since;
+    for (let i = 0; i < 100; i++) {
+      const dmHashes = await getDmHashes(dmCursor, config.maxSyncBatchSize);
+      if (dmHashes.length === 0) break;
+      send(ws, {
+        type: "dm_have",
+        hubId: config.hubId,
+        payload: { hashes: dmHashes, since: dmCursor.toISOString() } as HavePayload,
+      });
+      total += dmHashes.length;
+      if (dmHashes.length < config.maxSyncBatchSize) break;
+      const dmTs = await getDmHashTimestamp(dmHashes[dmHashes.length - 1]);
+      dmCursor = dmTs ? new Date(dmTs.getTime() + 1) : new Date();
+    }
+
+    if (total > 0) sent.push(hubId);
+  }
+  return sent;
 }
 
 /**

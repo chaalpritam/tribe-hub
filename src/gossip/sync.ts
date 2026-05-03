@@ -25,6 +25,45 @@ export async function getMessageHashes(since: Date, limit: number): Promise<stri
 }
 
 /**
+ * created_at of a single message hash (used to advance the cursor in
+ * broadcastHaveSince's batch loop).
+ */
+export async function getMessageHashTimestamp(hash: string): Promise<Date | null> {
+  const result = await db.query(
+    `SELECT created_at FROM messages WHERE hash = $1`,
+    [hash]
+  );
+  if (result.rows.length === 0) return null;
+  const ts = result.rows[0].created_at;
+  return ts instanceof Date ? ts : new Date(ts);
+}
+
+/** Mirrors getMessageHashTimestamp for the DM table. */
+export async function getDmHashTimestamp(hash: string): Promise<Date | null> {
+  const result = await db.query(
+    `SELECT created_at FROM dm_messages WHERE hash = $1`,
+    [hash]
+  );
+  if (result.rows.length === 0) return null;
+  const ts = result.rows[0].created_at;
+  return ts instanceof Date ? ts : new Date(ts);
+}
+
+/**
+ * Total message + DM counts for this hub (for sync coverage maths).
+ */
+export async function getOwnTotals(): Promise<{ messages: number; dms: number }> {
+  const [m, d] = await Promise.all([
+    db.query(`SELECT COUNT(*)::int as count FROM messages`),
+    db.query(`SELECT COUNT(*)::int as count FROM dm_messages`),
+  ]);
+  return {
+    messages: m.rows[0]?.count ?? 0,
+    dms: d.rows[0]?.count ?? 0,
+  };
+}
+
+/**
  * Find which hashes from a list we are missing locally.
  */
 export async function findMissingHashes(hashes: string[]): Promise<string[]> {
