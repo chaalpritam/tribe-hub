@@ -44,24 +44,71 @@ export async function feedRoutes(server: FastifyInstance): Promise<void> {
     const limit = Math.min(parseInt(request.query.limit || "20", 10), 100);
     const cursor = request.query.cursor;
     const params: (string | number)[] = [request.params.tid, limit];
+    // Profile feed: original tweets by this user UNION'd with the
+    // tweets they retweeted. Each retweet projects the ORIGINAL
+    // tweet (so the body, author, etc. all render correctly) and
+    // tags it with retweeted_by_* + retweeted_at metadata so the
+    // frontend can show a "@user retweeted" header. sort_ts is the
+    // user-action timestamp (their tweet, or their retweet) so the
+    // feed reads chronologically from their perspective.
     let query = `
-      SELECT m.hash, m.tid, m.type, m.text, m.parent_hash, m.channel_id,
-             m.mentions, m.embeds, m.timestamp, t.username,
-             (SELECT value FROM user_data WHERE tid = m.tid AND field = 'displayName' ORDER BY timestamp DESC LIMIT 1) AS display_name,
-             (SELECT value FROM user_data WHERE tid = m.tid AND field = 'pfpUrl' ORDER BY timestamp DESC LIMIT 1) AS pfp_url
-      FROM messages m
-      LEFT JOIN tids t ON t.tid = m.tid
-      WHERE m.tid = $1 AND m.type = 1
-        AND NOT EXISTS (
-          SELECT 1 FROM messages r
-          WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+      WITH user_messages AS (
+        (
+          SELECT m.hash, m.tid, m.type, m.text, m.parent_hash,
+                 m.channel_id, m.mentions, m.embeds, m.timestamp,
+                 NULL::bigint    AS retweeted_by_tid,
+                 NULL::text      AS retweeted_by_username,
+                 NULL::timestamptz AS retweeted_at,
+                 m.timestamp     AS sort_ts
+          FROM messages m
+          WHERE m.tid = $1 AND m.type = 1
+            AND NOT EXISTS (
+              SELECT 1 FROM messages r
+              WHERE r.type = 2 AND r.tid = m.tid AND r.text = m.hash
+            )
         )
+        UNION ALL
+        (
+          SELECT orig.hash, orig.tid, orig.type, orig.text, orig.parent_hash,
+                 orig.channel_id, orig.mentions, orig.embeds, orig.timestamp,
+                 rt.tid          AS retweeted_by_tid,
+                 rter.username   AS retweeted_by_username,
+                 rt.timestamp    AS retweeted_at,
+                 rt.timestamp    AS sort_ts
+          FROM messages rt
+          JOIN messages orig ON orig.hash = rt.parent_hash AND orig.type = 1
+          LEFT JOIN tids rter ON rter.tid = rt.tid
+          WHERE rt.tid = $1 AND rt.type = 3 AND rt.text = '2'
+            AND NOT EXISTS (
+              SELECT 1 FROM messages rr
+              WHERE rr.type = 4 AND rr.tid = rt.tid
+                AND rr.parent_hash = rt.parent_hash
+                AND rr.timestamp > rt.timestamp
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM messages tr
+              WHERE tr.type = 2 AND tr.tid = orig.tid AND tr.text = orig.hash
+            )
+        )
+      )
+      SELECT um.hash, um.tid, um.type, um.text, um.parent_hash,
+             um.channel_id, um.mentions, um.embeds, um.timestamp,
+             um.retweeted_by_tid, um.retweeted_by_username, um.retweeted_at,
+             t.username,
+             (SELECT value FROM user_data
+                WHERE tid = um.tid AND field = 'displayName'
+                ORDER BY timestamp DESC LIMIT 1) AS display_name,
+             (SELECT value FROM user_data
+                WHERE tid = um.tid AND field = 'pfpUrl'
+                ORDER BY timestamp DESC LIMIT 1) AS pfp_url
+      FROM user_messages um
+      LEFT JOIN tids t ON t.tid = um.tid
     `;
     if (cursor) {
-      query += ` AND m.timestamp < $3`;
+      query += ` WHERE um.sort_ts < $3`;
       params.push(cursor);
     }
-    query += ` ORDER BY m.timestamp DESC LIMIT $2`;
+    query += ` ORDER BY um.sort_ts DESC LIMIT $2`;
     const result = await db.query(query, params);
     return { tweets: result.rows };
   });
