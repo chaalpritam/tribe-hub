@@ -245,7 +245,14 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
             c.last_message_at,
             t.username AS peer_username,
             (SELECT COUNT(*)::int FROM dm_messages
-             WHERE conversation_id = c.id) AS message_count
+             WHERE conversation_id = c.id) AS message_count,
+            (SELECT COUNT(*)::int FROM dm_messages m
+             LEFT JOIN dm_read_receipts r
+               ON r.conversation_id = c.id AND r.tid = $1
+             WHERE m.conversation_id = c.id
+               AND m.sender_tid <> $1
+               AND (r.last_read_at IS NULL OR m.timestamp > r.last_read_at)
+            ) AS unread_count
          FROM dm_conversations c
          LEFT JOIN tids t
            ON t.tid = (CASE WHEN c.tid_a = $1 THEN c.tid_b ELSE c.tid_a END)
