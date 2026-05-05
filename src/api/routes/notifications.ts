@@ -192,49 +192,70 @@ export async function notificationRoutes(server: FastifyInstance): Promise<void>
     return { notifications: result.rows };
   });
 
-  server.get<{ Params: { tid: string } }>(
-    "/v1/notifications/:tid/count",
-    async (request) => {
-      const tid = request.params.tid;
-      const result = await db.query(
-        `SELECT
+  server.get<{
+    Params: { tid: string };
+    Querystring: { since?: string };
+  }>("/v1/notifications/:tid/count", async (request) => {
+    const tid = request.params.tid;
+    // `since` is an ISO timestamp; clients pass the moment the user
+    // last opened the notifications screen so the bell badge tracks
+    // unread events instead of lifetime activity. When omitted the
+    // count covers everything (legacy behavior).
+    const since =
+      request.query.since && !Number.isNaN(Date.parse(request.query.since))
+        ? new Date(request.query.since)
+        : null;
+    const result = await db.query(
+      `SELECT
            (SELECT COUNT(*) FROM social_graph
-              WHERE following_tid = $1 AND deleted_at IS NULL) +
+              WHERE following_tid = $1 AND deleted_at IS NULL
+                AND ($2::timestamptz IS NULL OR created_at > $2)) +
            (SELECT COUNT(*) FROM messages r
               JOIN messages m ON m.hash = r.parent_hash
-              WHERE r.type = 3 AND m.tid = $1) +
+              WHERE r.type = 3 AND m.tid = $1
+                AND ($2::timestamptz IS NULL OR r.timestamp > $2)) +
            (SELECT COUNT(*) FROM messages c
               JOIN messages m ON m.hash = c.parent_hash
               WHERE c.type = 1 AND c.parent_hash IS NOT NULL
-                AND m.tid = $1 AND c.tid <> $1) +
-           (SELECT COUNT(*) FROM tips WHERE recipient_tid = $1) +
+                AND m.tid = $1 AND c.tid <> $1
+                AND ($2::timestamptz IS NULL OR c.timestamp > $2)) +
+           (SELECT COUNT(*) FROM tips
+              WHERE recipient_tid = $1
+                AND ($2::timestamptz IS NULL OR sent_at > $2)) +
            (SELECT COUNT(*) FROM messages
-              WHERE type = 1 AND mentions @> ARRAY[$1::bigint] AND tid <> $1) +
+              WHERE type = 1 AND mentions @> ARRAY[$1::bigint] AND tid <> $1
+                AND ($2::timestamptz IS NULL OR timestamp > $2)) +
            (SELECT COUNT(*) FROM poll_votes pv
               JOIN polls p ON p.id = pv.poll_id
-              WHERE p.creator_tid = $1 AND pv.voter_tid <> $1) +
+              WHERE p.creator_tid = $1 AND pv.voter_tid <> $1
+                AND ($2::timestamptz IS NULL OR pv.voted_at > $2)) +
            (SELECT COUNT(*) FROM event_rsvps r
               JOIN events e ON e.id = r.event_id
-              WHERE e.creator_tid = $1 AND r.tid <> $1) +
+              WHERE e.creator_tid = $1 AND r.tid <> $1
+                AND ($2::timestamptz IS NULL OR r.rsvped_at > $2)) +
            (SELECT COUNT(*) FROM tasks
               WHERE creator_tid = $1 AND claimed_by_tid IS NOT NULL
-                AND claimed_by_tid <> $1) +
+                AND claimed_by_tid <> $1
+                AND ($2::timestamptz IS NULL OR claimed_at > $2)) +
            (SELECT COUNT(*) FROM tasks
               WHERE creator_tid = $1 AND completed_by_tid IS NOT NULL
-                AND completed_by_tid <> $1) +
+                AND completed_by_tid <> $1
+                AND ($2::timestamptz IS NULL OR completed_at > $2)) +
            (SELECT COUNT(*) FROM crowdfund_pledges cp
               JOIN crowdfunds cf ON cf.id = cp.crowdfund_id
-              WHERE cf.creator_tid = $1 AND cp.pledger_tid <> $1) +
+              WHERE cf.creator_tid = $1 AND cp.pledger_tid <> $1
+                AND ($2::timestamptz IS NULL OR cp.pledged_at > $2)) +
            (SELECT COUNT(*) FROM dm_messages
-              WHERE recipient_tid = $1 AND sender_tid <> $1) +
+              WHERE recipient_tid = $1 AND sender_tid <> $1
+                AND ($2::timestamptz IS NULL OR timestamp > $2)) +
            (SELECT COUNT(*) FROM dm_group_messages m
               JOIN dm_group_members me
                 ON me.group_id = m.group_id AND me.tid = $1
-              WHERE m.sender_tid <> $1)
+              WHERE m.sender_tid <> $1
+                AND ($2::timestamptz IS NULL OR m.timestamp > $2))
            AS count`,
-        [tid]
-      );
-      return { count: Number(result.rows[0]?.count ?? 0) };
-    }
-  );
+      [tid, since]
+    );
+    return { count: Number(result.rows[0]?.count ?? 0) };
+  });
 }
