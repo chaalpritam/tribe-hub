@@ -69,6 +69,8 @@ export interface GossipEnvelope {
     | "dm_have"
     | "dm_want"
     | "dm_key"
+    | "group_create"
+    | "group_msg"
     | "ping"
     | "pong";
   hubId: string;
@@ -102,6 +104,51 @@ export interface DmMessagesPayload {
 export interface DmKeyPayload {
   tid: string;
   x25519Pubkey: string;
+}
+
+/** Group creation envelope as gossiped between hubs. Carries the
+ * member list so the receiver can populate dm_group_members in the
+ * same transaction-shaped sequence the originating hub did. */
+export interface GossipGroupCreate {
+  hash: string;
+  groupId: string;
+  name: string;
+  creatorTid: string;
+  memberTids: string[];
+  signature: string;
+  signer: string;
+  /** Same role as on GossipMessage / GossipDm. Optional during rollout. */
+  dataB64?: string;
+}
+
+/** Per-recipient ciphertext slice carried inside a GossipGroupMsg. */
+export interface GossipGroupCipher {
+  recipientTid: string;
+  ciphertext: string;
+  nonce: string;
+}
+
+/** Group message envelope + every recipient's ciphertext. The hub
+ * never holds plaintext — each ciphertext is encrypted to one
+ * recipient's x25519 pubkey. */
+export interface GossipGroupMsg {
+  hash: string;
+  groupId: string;
+  senderTid: string;
+  senderX25519: string;
+  timestamp: string;
+  ciphertexts: GossipGroupCipher[];
+  signature: string;
+  signer: string;
+  dataB64?: string;
+}
+
+export interface GroupCreatePayload {
+  groups: GossipGroupCreate[];
+}
+
+export interface GroupMsgPayload {
+  messages: GossipGroupMsg[];
 }
 
 export interface HelloPayload {

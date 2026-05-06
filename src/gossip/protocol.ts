@@ -16,6 +16,10 @@ import {
   DmKeyPayload,
   GossipMessage,
   GossipDm,
+  GossipGroupCreate,
+  GossipGroupMsg,
+  GroupCreatePayload,
+  GroupMsgPayload,
 } from "../types";
 import {
   getMessageHashes,
@@ -25,6 +29,8 @@ import {
   storeGossipMessage,
   storeGossipDm,
   storeGossipDmKey,
+  storeGossipGroupCreate,
+  storeGossipGroupMsg,
   getDmHashes,
   getDmHashTimestamp,
   getDmsByHashes,
@@ -223,6 +229,45 @@ export function gossipDm(msg: GossipDm): void {
     type: "dm_messages",
     hubId: config.hubId,
     payload: { messages: [msg] } as DmMessagesPayload,
+  };
+
+  for (const [, ws] of connectedPeers) {
+    send(ws, envelope);
+  }
+}
+
+/**
+ * Push a freshly-created group to peers so members on other hubs
+ * can see the conversation as soon as the creator's hub accepts it.
+ * Push-only — peers that miss this catch up via a future have/want
+ * cycle (not implemented yet for groups).
+ */
+export function gossipGroupCreate(group: GossipGroupCreate): void {
+  if (connectedPeers.size === 0) return;
+
+  const envelope: GossipEnvelope = {
+    type: "group_create",
+    hubId: config.hubId,
+    payload: { groups: [group] } as GroupCreatePayload,
+  };
+
+  for (const [, ws] of connectedPeers) {
+    send(ws, envelope);
+  }
+}
+
+/**
+ * Push a freshly-sent group message + per-recipient ciphertexts to
+ * peers. The receiver applies it only if the matching group create
+ * is already known locally.
+ */
+export function gossipGroupMessage(msg: GossipGroupMsg): void {
+  if (connectedPeers.size === 0) return;
+
+  const envelope: GossipEnvelope = {
+    type: "group_msg",
+    hubId: config.hubId,
+    payload: { messages: [msg] } as GroupMsgPayload,
   };
 
   for (const [, ws] of connectedPeers) {
@@ -491,6 +536,52 @@ async function handlePeerMessage(
       const payload = msg.payload as DmKeyPayload;
       if (!payload?.tid || !payload?.x25519Pubkey) break;
       await storeGossipDmKey(payload.tid, payload.x25519Pubkey);
+      break;
+    }
+
+    case "group_create": {
+      const payload = msg.payload as GroupCreatePayload;
+      if (!Array.isArray(payload.groups) || payload.groups.length > 1000) {
+        console.warn(
+          `Rejected group_create from ${msg.hubId}: invalid or too large (${payload.groups?.length})`
+        );
+        break;
+      }
+      let stored = 0;
+      for (const g of payload.groups) {
+        const ok = await storeGossipGroupCreate(g, msg.hubId);
+        if (ok) stored++;
+      }
+      if (stored > 0) {
+        console.log(
+          `Stored ${stored}/${payload.groups.length} group creates from ${msg.hubId}`
+        );
+        gossipMessagesStoredTotal.inc({ kind: "group_create" }, stored);
+        await incrementPeerMessageCount(msg.hubId, stored);
+      }
+      break;
+    }
+
+    case "group_msg": {
+      const payload = msg.payload as GroupMsgPayload;
+      if (!Array.isArray(payload.messages) || payload.messages.length > 1000) {
+        console.warn(
+          `Rejected group_msg from ${msg.hubId}: invalid or too large (${payload.messages?.length})`
+        );
+        break;
+      }
+      let stored = 0;
+      for (const gm of payload.messages) {
+        const ok = await storeGossipGroupMsg(gm, msg.hubId);
+        if (ok) stored++;
+      }
+      if (stored > 0) {
+        console.log(
+          `Stored ${stored}/${payload.messages.length} group messages from ${msg.hubId}`
+        );
+        gossipMessagesStoredTotal.inc({ kind: "group_msg" }, stored);
+        await incrementPeerMessageCount(msg.hubId, stored);
+      }
       break;
     }
 

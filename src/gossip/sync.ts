@@ -1,7 +1,12 @@
 import nacl from "tweetnacl";
 import { hash as blake3Hash } from "blake3";
 import { db } from "../storage/db";
-import { GossipMessage, GossipDm } from "../types";
+import {
+  GossipMessage,
+  GossipDm,
+  GossipGroupCreate,
+  GossipGroupMsg,
+} from "../types";
 import { validateGossipMessage } from "../validation/verifier";
 import { appKeyCache } from "../validation/app-key-cache";
 import { broadcastToClients } from "../api/ws";
@@ -443,6 +448,324 @@ export async function findMissingDmHashes(
   );
   const existing = new Set(result.rows.map((r: { hash: string }) => r.hash));
   return hashes.filter((h) => !existing.has(h));
+}
+
+// ── Group DM gossip ─────────────────────────────────────────────────
+
+/**
+ * Same dataB64 dance as verifyAndOverrideDmDataB64 but for group
+ * creation envelopes — the decoded body holds {group_id, name,
+ * member_tids}, which we project onto the wire shape.
+ */
+function verifyAndOverrideGroupCreateDataB64(
+  msg: GossipGroupCreate
+): boolean {
+  if (!msg.dataB64) {
+    recordDataB64Status("gossip", "absent");
+    if (config.requireDataB64) {
+      console.warn(
+        `Rejected gossip group create ${msg.hash}: dataB64 required (REQUIRE_DATA_B64=true)`
+      );
+      return false;
+    }
+    return true;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(msg.dataB64, "base64");
+    if (bytes.length === 0) throw new Error("empty");
+  } catch {
+    recordDataB64Status("gossip", "invalid_base64");
+    return false;
+  }
+  const computed = blake3Hash(bytes) as Uint8Array;
+  const claimed = Buffer.from(msg.hash, "base64");
+  if (
+    computed.length !== claimed.length ||
+    !Buffer.from(computed).equals(claimed)
+  ) {
+    recordDataB64Status("gossip", "mismatch");
+    return false;
+  }
+  recordDataB64Status("gossip", "present");
+
+  if (bytes[0] === 0x7b /* '{' */) {
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8")) as {
+        tid?: number | string;
+        body?: {
+          group_id?: string;
+          name?: string;
+          member_tids?: Array<number | string>;
+        };
+      };
+      if (parsed?.body) {
+        if (typeof parsed.tid !== "undefined") {
+          msg.creatorTid = String(parsed.tid);
+        }
+        if (typeof parsed.body.group_id === "string") {
+          msg.groupId = parsed.body.group_id;
+        }
+        if (typeof parsed.body.name === "string") {
+          msg.name = parsed.body.name;
+        }
+        if (Array.isArray(parsed.body.member_tids)) {
+          msg.memberTids = parsed.body.member_tids.map((m) => String(m));
+        }
+        recordDataB64Status("gossip", "decoded_json");
+      }
+    } catch {
+      // Hash matched but bytes didn't parse — keep wire projection.
+    }
+  }
+  return true;
+}
+
+function verifyAndOverrideGroupMsgDataB64(msg: GossipGroupMsg): boolean {
+  if (!msg.dataB64) {
+    recordDataB64Status("gossip", "absent");
+    if (config.requireDataB64) {
+      console.warn(
+        `Rejected gossip group msg ${msg.hash}: dataB64 required (REQUIRE_DATA_B64=true)`
+      );
+      return false;
+    }
+    return true;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(msg.dataB64, "base64");
+    if (bytes.length === 0) throw new Error("empty");
+  } catch {
+    recordDataB64Status("gossip", "invalid_base64");
+    return false;
+  }
+  const computed = blake3Hash(bytes) as Uint8Array;
+  const claimed = Buffer.from(msg.hash, "base64");
+  if (
+    computed.length !== claimed.length ||
+    !Buffer.from(computed).equals(claimed)
+  ) {
+    recordDataB64Status("gossip", "mismatch");
+    return false;
+  }
+  recordDataB64Status("gossip", "present");
+
+  if (bytes[0] === 0x7b /* '{' */) {
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8")) as {
+        tid?: number | string;
+        timestamp?: number;
+        body?: {
+          group_id?: string;
+          sender_x25519?: string;
+          ciphertexts?: Array<{
+            recipient_tid?: number | string;
+            ciphertext?: string;
+            nonce?: string;
+          }>;
+        };
+      };
+      if (parsed?.body) {
+        if (typeof parsed.tid !== "undefined") {
+          msg.senderTid = String(parsed.tid);
+        }
+        if (typeof parsed.timestamp === "number" && parsed.timestamp > 0) {
+          msg.timestamp = new Date(parsed.timestamp * 1000).toISOString();
+        }
+        if (typeof parsed.body.group_id === "string") {
+          msg.groupId = parsed.body.group_id;
+        }
+        if (typeof parsed.body.sender_x25519 === "string") {
+          msg.senderX25519 = parsed.body.sender_x25519;
+        }
+        if (Array.isArray(parsed.body.ciphertexts)) {
+          msg.ciphertexts = parsed.body.ciphertexts
+            .filter(
+              (c) =>
+                c &&
+                typeof c.ciphertext === "string" &&
+                typeof c.nonce === "string" &&
+                typeof c.recipient_tid !== "undefined"
+            )
+            .map((c) => ({
+              recipientTid: String(c.recipient_tid),
+              ciphertext: c.ciphertext as string,
+              nonce: c.nonce as string,
+            }));
+        }
+        recordDataB64Status("gossip", "decoded_json");
+      }
+    } catch {
+      // Hash matched but bytes didn't parse — keep wire projection.
+    }
+  }
+  return true;
+}
+
+/**
+ * Persist a group-create envelope from a peer hub. Idempotent on
+ * (group_id) — re-creating an existing group is a no-op for the row
+ * and an INSERT-ON-CONFLICT for each member.
+ */
+export async function storeGossipGroupCreate(
+  msg: GossipGroupCreate,
+  fromHubId: string
+): Promise<boolean> {
+  try {
+    const hash = Buffer.from(msg.hash, "base64");
+    const signature = Buffer.from(msg.signature, "base64");
+    const signer = Buffer.from(msg.signer, "base64");
+    if (!nacl.sign.detached.verify(hash, signature, signer)) {
+      console.warn(`Rejected gossip group create ${msg.hash}: bad signature`);
+      return false;
+    }
+    if (!verifyAndOverrideGroupCreateDataB64(msg)) return false;
+    const signerHex = Buffer.from(signer).toString("hex");
+    const valid = await appKeyCache.isValid(msg.creatorTid, signerHex);
+    if (!valid) {
+      console.warn(
+        `Rejected gossip group create ${msg.hash}: signer not an app key for ${msg.creatorTid}`
+      );
+      return false;
+    }
+  } catch (err) {
+    console.warn(`Rejected gossip group create ${msg.hash}: verify error`, err);
+    return false;
+  }
+
+  if (msg.dataB64) {
+    await storeSignedEnvelope(msg.hash, msg.dataB64);
+  }
+
+  const result = await db.query(
+    `INSERT INTO dm_groups (id, name, creator_tid, hash, signature, signer)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      msg.groupId,
+      msg.name,
+      msg.creatorTid,
+      msg.hash,
+      msg.signature,
+      msg.signer,
+    ]
+  );
+
+  if (msg.memberTids.length > 0) {
+    const values: string[] = [];
+    const params: unknown[] = [];
+    for (const tid of msg.memberTids) {
+      params.push(msg.groupId, parseInt(String(tid), 10));
+      const i = params.length;
+      values.push(`($${i - 1}, $${i})`);
+    }
+    await db.query(
+      `INSERT INTO dm_group_members (group_id, tid)
+       VALUES ${values.join(", ")}
+       ON CONFLICT (group_id, tid) DO NOTHING`,
+      params
+    );
+  }
+
+  const stored = (result.rowCount ?? 0) > 0;
+  if (stored) {
+    console.log(
+      `Stored gossip group ${msg.groupId} (${msg.memberTids.length} members) from ${fromHubId}`
+    );
+  }
+  return stored;
+}
+
+/**
+ * Persist a group message + per-recipient ciphertexts from a peer.
+ * If the FK to dm_groups isn't satisfied yet (the matching create
+ * hasn't arrived), the INSERT errors and we surface a warning;
+ * a subsequent group_create gossip will reconcile.
+ */
+export async function storeGossipGroupMsg(
+  msg: GossipGroupMsg,
+  fromHubId: string
+): Promise<boolean> {
+  try {
+    const hash = Buffer.from(msg.hash, "base64");
+    const signature = Buffer.from(msg.signature, "base64");
+    const signer = Buffer.from(msg.signer, "base64");
+    if (!nacl.sign.detached.verify(hash, signature, signer)) {
+      console.warn(`Rejected gossip group msg ${msg.hash}: bad signature`);
+      return false;
+    }
+    if (!verifyAndOverrideGroupMsgDataB64(msg)) return false;
+    const signerHex = Buffer.from(signer).toString("hex");
+    const valid = await appKeyCache.isValid(msg.senderTid, signerHex);
+    if (!valid) {
+      console.warn(
+        `Rejected gossip group msg ${msg.hash}: signer not an app key for ${msg.senderTid}`
+      );
+      return false;
+    }
+  } catch (err) {
+    console.warn(`Rejected gossip group msg ${msg.hash}: verify error`, err);
+    return false;
+  }
+
+  if (msg.dataB64) {
+    await storeSignedEnvelope(msg.hash, msg.dataB64);
+  }
+
+  const sentAt = new Date(msg.timestamp);
+  try {
+    const result = await db.query(
+      `INSERT INTO dm_group_messages
+         (hash, group_id, sender_tid, sender_x25519, timestamp, signature, signer)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (hash) DO NOTHING`,
+      [
+        msg.hash,
+        msg.groupId,
+        msg.senderTid,
+        msg.senderX25519,
+        sentAt,
+        msg.signature,
+        msg.signer,
+      ]
+    );
+
+    if ((result.rowCount ?? 0) === 0) {
+      // Already had it (duplicate gossip) — not an error.
+      return false;
+    }
+
+    if (msg.ciphertexts.length > 0) {
+      const values: string[] = [];
+      const params: unknown[] = [];
+      for (const c of msg.ciphertexts) {
+        params.push(msg.hash, c.recipientTid, c.ciphertext, c.nonce);
+        const i = params.length;
+        values.push(`($${i - 3}, $${i - 2}, $${i - 1}, $${i})`);
+      }
+      await db.query(
+        `INSERT INTO dm_group_ciphertexts
+           (envelope_hash, recipient_tid, ciphertext, nonce)
+         VALUES ${values.join(", ")}
+         ON CONFLICT (envelope_hash, recipient_tid) DO NOTHING`,
+        params
+      );
+    }
+
+    console.log(
+      `Stored gossip group msg ${msg.hash.slice(0, 12)}… (${msg.ciphertexts.length} ciphertexts) from ${fromHubId}`
+    );
+    return true;
+  } catch (err) {
+    // Most likely an FK violation because the group create hasn't
+    // arrived yet. Surface but don't crash.
+    console.warn(
+      `Skipped gossip group msg ${msg.hash}: insert failed (group ${msg.groupId} unknown locally?)`,
+      err
+    );
+    return false;
+  }
 }
 
 /** Pull DMs by hash for sending in a dm_messages envelope. */

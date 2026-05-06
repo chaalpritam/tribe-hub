@@ -3,7 +3,12 @@ import { db } from "../../storage/db";
 import { storeSignedEnvelope } from "../../storage/signed-envelopes";
 import { verifyEnvelopeBaseline } from "../../validation/verifier";
 import { SubmitMessageRequest } from "../../types";
-import { gossipDm, gossipDmKey } from "../../gossip/protocol";
+import {
+  gossipDm,
+  gossipDmKey,
+  gossipGroupCreate,
+  gossipGroupMessage,
+} from "../../gossip/protocol";
 
 import { MessageType } from "../../messages/types";
 
@@ -390,6 +395,17 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
         );
       }
 
+      gossipGroupCreate({
+        hash: message.hash,
+        groupId: body.group_id,
+        name: body.name,
+        creatorTid: String(message.data.tid),
+        memberTids: body.member_tids.map((m) => String(m)),
+        signature: message.signature,
+        signer: message.signer,
+        dataB64: message.dataB64,
+      });
+
       return { group_id: body.group_id };
     }
   );
@@ -472,6 +488,22 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
          ON CONFLICT (envelope_hash, recipient_tid) DO NOTHING`,
         params
       );
+
+      gossipGroupMessage({
+        hash: message.hash,
+        groupId: body.group_id,
+        senderTid: String(message.data.tid),
+        senderX25519: body.sender_x25519,
+        timestamp: sentAt.toISOString(),
+        ciphertexts: body.ciphertexts.map((c) => ({
+          recipientTid: String(c.recipient_tid),
+          ciphertext: c.ciphertext,
+          nonce: c.nonce,
+        })),
+        signature: message.signature,
+        signer: message.signer,
+        dataB64: message.dataB64,
+      });
 
       return { hash: message.hash, group_id: body.group_id };
     }
