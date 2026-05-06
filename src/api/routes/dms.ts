@@ -473,20 +473,34 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
     }
   );
 
-  // List groups a TID belongs to.
+  // List groups a TID belongs to. last_message_at + unread_count are
+  // joined in so the inbox can sort by recency and show a badge
+  // without a second round-trip per group. unread_count counts group
+  // messages newer than this tid's last_read_at (read receipts are
+  // stored in dm_read_receipts keyed by conversation_id 'group:<id>').
   server.get<{ Params: { tid: string } }>(
     "/v1/dm/groups/member/:tid",
     async (request) => {
+      const tid = parseInt(request.params.tid, 10);
       const result = await db.query(
         `SELECT g.id, g.name, g.creator_tid, g.created_at,
                 m.joined_at,
                 (SELECT COUNT(*) FROM dm_group_members
-                   WHERE group_id = g.id) AS member_count
+                   WHERE group_id = g.id) AS member_count,
+                (SELECT MAX(timestamp) FROM dm_group_messages
+                   WHERE group_id = g.id) AS last_message_at,
+                (SELECT COUNT(*)::int FROM dm_group_messages gm
+                 LEFT JOIN dm_read_receipts r
+                   ON r.conversation_id = 'group:' || g.id AND r.tid = $1
+                 WHERE gm.group_id = g.id
+                   AND gm.sender_tid <> $1
+                   AND (r.last_read_at IS NULL OR gm.timestamp > r.last_read_at)
+                ) AS unread_count
          FROM dm_group_members m
          JOIN dm_groups g ON g.id = m.group_id
          WHERE m.tid = $1
-         ORDER BY g.created_at DESC`,
-        [request.params.tid]
+         ORDER BY last_message_at DESC NULLS LAST, g.created_at DESC`,
+        [tid]
       );
       return { groups: result.rows };
     }
