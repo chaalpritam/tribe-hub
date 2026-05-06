@@ -12,6 +12,7 @@ const {
   DM_SEND,
   DM_GROUP_CREATE,
   DM_GROUP_SEND,
+  DM_GROUP_LEAVE,
   DM_READ,
 } = MessageType;
 
@@ -503,6 +504,51 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
         [tid]
       );
       return { groups: result.rows };
+    }
+  );
+
+  // Remove the caller from a group's member list. The creator can't
+  // leave their own group while there's no ownership-transfer flow —
+  // they'd have to delete the group entirely, which lives in a
+  // future phase. Idempotent: leaving a group you're not in is a 200.
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/groups/leave",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_GROUP_LEAVE) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_GROUP_LEAVE envelope" });
+      }
+      const validation = await verifyAndPersistEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as { group_id?: string };
+      if (!body?.group_id || !GROUP_ID_RE.test(body.group_id)) {
+        return reply.status(400).send({ error: "group_id required" });
+      }
+
+      const group = await db.query(
+        `SELECT creator_tid FROM dm_groups WHERE id = $1`,
+        [body.group_id]
+      );
+      if (group.rows.length === 0) {
+        return reply.status(404).send({ error: "Group not found" });
+      }
+      if (Number(group.rows[0].creator_tid) === Number(message.data.tid)) {
+        return reply.status(403).send({
+          error: "Creator cannot leave their own group",
+        });
+      }
+
+      await db.query(
+        `DELETE FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
+        [body.group_id, message.data.tid]
+      );
+
+      return { ok: true };
     }
   );
 
