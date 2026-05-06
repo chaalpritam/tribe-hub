@@ -15,6 +15,7 @@ const {
   DM_GROUP_LEAVE,
   DM_GROUP_ADD_MEMBER,
   DM_GROUP_REMOVE_MEMBER,
+  DM_GROUP_DELETE,
   DM_READ,
 } = MessageType;
 
@@ -667,6 +668,47 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
         `DELETE FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
         [body.group_id, targetTid]
       );
+
+      return { ok: true };
+    }
+  );
+
+  // Delete a group entirely. Creator-only. dm_group_members and
+  // dm_group_messages cascade (and dm_group_ciphertexts cascades off
+  // dm_group_messages), so a single DELETE on dm_groups is enough.
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/groups/delete",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_GROUP_DELETE) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_GROUP_DELETE envelope" });
+      }
+      const validation = await verifyAndPersistEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as { group_id?: string };
+      if (!body?.group_id || !GROUP_ID_RE.test(body.group_id)) {
+        return reply.status(400).send({ error: "group_id required" });
+      }
+
+      const group = await db.query(
+        `SELECT creator_tid FROM dm_groups WHERE id = $1`,
+        [body.group_id]
+      );
+      if (group.rows.length === 0) {
+        return reply.status(404).send({ error: "Group not found" });
+      }
+      if (Number(group.rows[0].creator_tid) !== Number(message.data.tid)) {
+        return reply
+          .status(403)
+          .send({ error: "Only the creator can delete the group" });
+      }
+
+      await db.query(`DELETE FROM dm_groups WHERE id = $1`, [body.group_id]);
 
       return { ok: true };
     }

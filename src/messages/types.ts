@@ -34,6 +34,7 @@ export const MessageType = {
   DM_GROUP_LEAVE: 29,
   DM_GROUP_ADD_MEMBER: 30,
   DM_GROUP_REMOVE_MEMBER: 31,
+  DM_GROUP_DELETE: 32,
 } as const;
 
 export type MessageTypeKey = keyof typeof MessageType;
