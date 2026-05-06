@@ -13,6 +13,8 @@ const {
   DM_GROUP_CREATE,
   DM_GROUP_SEND,
   DM_GROUP_LEAVE,
+  DM_GROUP_ADD_MEMBER,
+  DM_GROUP_REMOVE_MEMBER,
   DM_READ,
 } = MessageType;
 
@@ -546,6 +548,124 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
       await db.query(
         `DELETE FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
         [body.group_id, message.data.tid]
+      );
+
+      return { ok: true };
+    }
+  );
+
+  // Add a member to a group. Creator-only until a richer permission
+  // model exists (no admin role, no self-invite). Idempotent thanks
+  // to the (group_id, tid) primary key.
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/groups/add-member",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_GROUP_ADD_MEMBER) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_GROUP_ADD_MEMBER envelope" });
+      }
+      const validation = await verifyAndPersistEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as {
+        group_id?: string;
+        tid?: number | string;
+      };
+      const newTid =
+        typeof body?.tid === "string" ? parseInt(body.tid, 10) : body?.tid;
+      if (
+        !body?.group_id ||
+        !GROUP_ID_RE.test(body.group_id) ||
+        !newTid ||
+        Number.isNaN(newTid)
+      ) {
+        return reply
+          .status(400)
+          .send({ error: "group_id and numeric tid required" });
+      }
+
+      const group = await db.query(
+        `SELECT creator_tid FROM dm_groups WHERE id = $1`,
+        [body.group_id]
+      );
+      if (group.rows.length === 0) {
+        return reply.status(404).send({ error: "Group not found" });
+      }
+      if (Number(group.rows[0].creator_tid) !== Number(message.data.tid)) {
+        return reply
+          .status(403)
+          .send({ error: "Only the creator can add members" });
+      }
+
+      await db.query(
+        `INSERT INTO dm_group_members (group_id, tid)
+         VALUES ($1, $2)
+         ON CONFLICT (group_id, tid) DO NOTHING`,
+        [body.group_id, newTid]
+      );
+
+      return { ok: true };
+    }
+  );
+
+  // Remove a member from a group. Creator-only; the creator can't
+  // remove themselves (use the future delete-group flow instead).
+  server.post<{ Body: SubmitMessageRequest }>(
+    "/v1/dm/groups/remove-member",
+    async (request, reply) => {
+      const message = request.body;
+      if (message?.data?.type !== DM_GROUP_REMOVE_MEMBER) {
+        return reply
+          .status(400)
+          .send({ error: "Expected DM_GROUP_REMOVE_MEMBER envelope" });
+      }
+      const validation = await verifyAndPersistEnvelope(message);
+      if (!validation.valid) {
+        return reply.status(400).send({ error: validation.error });
+      }
+
+      const body = message.data.body as unknown as {
+        group_id?: string;
+        tid?: number | string;
+      };
+      const targetTid =
+        typeof body?.tid === "string" ? parseInt(body.tid, 10) : body?.tid;
+      if (
+        !body?.group_id ||
+        !GROUP_ID_RE.test(body.group_id) ||
+        !targetTid ||
+        Number.isNaN(targetTid)
+      ) {
+        return reply
+          .status(400)
+          .send({ error: "group_id and numeric tid required" });
+      }
+
+      const group = await db.query(
+        `SELECT creator_tid FROM dm_groups WHERE id = $1`,
+        [body.group_id]
+      );
+      if (group.rows.length === 0) {
+        return reply.status(404).send({ error: "Group not found" });
+      }
+      if (Number(group.rows[0].creator_tid) !== Number(message.data.tid)) {
+        return reply
+          .status(403)
+          .send({ error: "Only the creator can remove members" });
+      }
+      if (Number(group.rows[0].creator_tid) === targetTid) {
+        return reply
+          .status(403)
+          .send({ error: "Creator cannot be removed" });
+      }
+
+      await db.query(
+        `DELETE FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
+        [body.group_id, targetTid]
       );
 
       return { ok: true };
