@@ -6,7 +6,9 @@ import {
   GossipDm,
   GossipGroupCreate,
   GossipGroupMsg,
+  GossipGroupStateOp,
 } from "../types";
+import { MessageType } from "../messages/types";
 import { validateGossipMessage } from "../validation/verifier";
 import { appKeyCache } from "../validation/app-key-cache";
 import { broadcastToClients } from "../api/ws";
@@ -766,6 +768,172 @@ export async function storeGossipGroupMsg(
     );
     return false;
   }
+}
+
+/**
+ * Same dataB64 dance as the create/msg helpers, but for state-op
+ * envelopes. Decoded body shape is one of:
+ *   LEAVE / DELETE: { group_id }
+ *   ADD / REMOVE:   { group_id, tid }
+ * We project group_id onto msg.groupId and (when present) tid onto
+ * msg.targetTid so the dispatch step can read from msg without
+ * having to decode dataB64 a second time.
+ */
+function verifyAndOverrideGroupStateOpDataB64(
+  msg: GossipGroupStateOp
+): boolean {
+  if (!msg.dataB64) {
+    recordDataB64Status("gossip", "absent");
+    if (config.requireDataB64) {
+      console.warn(
+        `Rejected gossip group state op ${msg.hash}: dataB64 required (REQUIRE_DATA_B64=true)`
+      );
+      return false;
+    }
+    return true;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(msg.dataB64, "base64");
+    if (bytes.length === 0) throw new Error("empty");
+  } catch {
+    recordDataB64Status("gossip", "invalid_base64");
+    return false;
+  }
+  const computed = blake3Hash(bytes) as Uint8Array;
+  const claimed = Buffer.from(msg.hash, "base64");
+  if (
+    computed.length !== claimed.length ||
+    !Buffer.from(computed).equals(claimed)
+  ) {
+    recordDataB64Status("gossip", "mismatch");
+    return false;
+  }
+  recordDataB64Status("gossip", "present");
+
+  if (bytes[0] === 0x7b /* '{' */) {
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8")) as {
+        tid?: number | string;
+        type?: number;
+        body?: { group_id?: string; tid?: number | string };
+      };
+      if (parsed?.body) {
+        if (typeof parsed.tid !== "undefined") {
+          msg.signerTid = String(parsed.tid);
+        }
+        if (typeof parsed.type === "number") {
+          msg.type = parsed.type;
+        }
+        if (typeof parsed.body.group_id === "string") {
+          msg.groupId = parsed.body.group_id;
+        }
+        if (typeof parsed.body.tid !== "undefined") {
+          msg.targetTid = String(parsed.body.tid);
+        }
+        recordDataB64Status("gossip", "decoded_json");
+      }
+    } catch {
+      // Hash matched but bytes didn't parse — keep wire projection.
+    }
+  }
+  return true;
+}
+
+/**
+ * Apply a state-changing group op gossiped from a peer. Authorization
+ * was already enforced on the originating hub (creator-only for
+ * ADD/REMOVE/DELETE, not-creator for LEAVE), so the receiver only
+ * checks envelope authenticity (signature + dataB64 + app key) and
+ * applies idempotently. The four op types map onto:
+ *
+ *   DM_GROUP_LEAVE          → DELETE FROM dm_group_members WHERE (g, signer)
+ *   DM_GROUP_ADD_MEMBER     → INSERT … ON CONFLICT DO NOTHING
+ *   DM_GROUP_REMOVE_MEMBER  → DELETE FROM dm_group_members WHERE (g, target)
+ *   DM_GROUP_DELETE         → DELETE FROM dm_groups WHERE id = g (cascades)
+ */
+export async function storeGossipGroupStateOp(
+  msg: GossipGroupStateOp,
+  fromHubId: string
+): Promise<boolean> {
+  try {
+    const hash = Buffer.from(msg.hash, "base64");
+    const signature = Buffer.from(msg.signature, "base64");
+    const signer = Buffer.from(msg.signer, "base64");
+    if (!nacl.sign.detached.verify(hash, signature, signer)) {
+      console.warn(`Rejected gossip group state op ${msg.hash}: bad signature`);
+      return false;
+    }
+    if (!verifyAndOverrideGroupStateOpDataB64(msg)) return false;
+    const signerHex = Buffer.from(signer).toString("hex");
+    const valid = await appKeyCache.isValid(msg.signerTid, signerHex);
+    if (!valid) {
+      console.warn(
+        `Rejected gossip group state op ${msg.hash}: signer not an app key for ${msg.signerTid}`
+      );
+      return false;
+    }
+  } catch (err) {
+    console.warn(
+      `Rejected gossip group state op ${msg.hash}: verify error`,
+      err
+    );
+    return false;
+  }
+
+  if (msg.dataB64) {
+    await storeSignedEnvelope(msg.hash, msg.dataB64);
+  }
+
+  switch (msg.type) {
+    case MessageType.DM_GROUP_LEAVE:
+      await db.query(
+        `DELETE FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
+        [msg.groupId, msg.signerTid]
+      );
+      break;
+    case MessageType.DM_GROUP_ADD_MEMBER:
+      if (!msg.targetTid) {
+        console.warn(
+          `Skipped gossip ADD ${msg.hash}: no target tid in projection`
+        );
+        return false;
+      }
+      await db.query(
+        `INSERT INTO dm_group_members (group_id, tid)
+         VALUES ($1, $2)
+         ON CONFLICT (group_id, tid) DO NOTHING`,
+        [msg.groupId, parseInt(msg.targetTid, 10)]
+      );
+      break;
+    case MessageType.DM_GROUP_REMOVE_MEMBER:
+      if (!msg.targetTid) {
+        console.warn(
+          `Skipped gossip REMOVE ${msg.hash}: no target tid in projection`
+        );
+        return false;
+      }
+      await db.query(
+        `DELETE FROM dm_group_members WHERE group_id = $1 AND tid = $2`,
+        [msg.groupId, parseInt(msg.targetTid, 10)]
+      );
+      break;
+    case MessageType.DM_GROUP_DELETE:
+      // CASCADE on dm_group_members and dm_group_messages takes care
+      // of the rest (and dm_group_ciphertexts cascades off messages).
+      await db.query(`DELETE FROM dm_groups WHERE id = $1`, [msg.groupId]);
+      break;
+    default:
+      console.warn(
+        `Rejected gossip group state op ${msg.hash}: unknown type ${msg.type}`
+      );
+      return false;
+  }
+
+  console.log(
+    `Applied gossip group state op type=${msg.type} group=${msg.groupId} from ${fromHubId}`
+  );
+  return true;
 }
 
 /** Recent group create hashes for catch-up gossip. */

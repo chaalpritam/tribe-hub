@@ -18,8 +18,10 @@ import {
   GossipDm,
   GossipGroupCreate,
   GossipGroupMsg,
+  GossipGroupStateOp,
   GroupCreatePayload,
   GroupMsgPayload,
+  GroupStateOpPayload,
 } from "../types";
 import {
   getMessageHashes,
@@ -31,6 +33,7 @@ import {
   storeGossipDmKey,
   storeGossipGroupCreate,
   storeGossipGroupMsg,
+  storeGossipGroupStateOp,
   getGroupCreateHashes,
   getGroupCreateHashTimestamp,
   findMissingGroupCreateHashes,
@@ -305,6 +308,26 @@ export function gossipGroupCreate(group: GossipGroupCreate): void {
     type: "group_create",
     hubId: config.hubId,
     payload: { groups: [group] } as GroupCreatePayload,
+  };
+
+  for (const [, ws] of connectedPeers) {
+    send(ws, envelope);
+  }
+}
+
+/**
+ * Push a state-changing group op (leave/add/remove/delete) to peers.
+ * Push-only — receivers apply idempotently. Catch-up for state ops
+ * isn't implemented; relies on the action being re-issued or the
+ * happy-path push reaching every peer.
+ */
+export function gossipGroupStateOp(op: GossipGroupStateOp): void {
+  if (connectedPeers.size === 0) return;
+
+  const envelope: GossipEnvelope = {
+    type: "group_state_op",
+    hubId: config.hubId,
+    payload: { ops: [op] } as GroupStateOpPayload,
   };
 
   for (const [, ws] of connectedPeers) {
@@ -725,6 +748,29 @@ async function handlePeerMessage(
         );
         gossipMessagesStoredTotal.inc({ kind: "group_msg" }, stored);
         await incrementPeerMessageCount(msg.hubId, stored);
+      }
+      break;
+    }
+
+    case "group_state_op": {
+      const payload = msg.payload as GroupStateOpPayload;
+      if (!Array.isArray(payload.ops) || payload.ops.length > 1000) {
+        console.warn(
+          `Rejected group_state_op from ${msg.hubId}: invalid or too large (${payload.ops?.length})`
+        );
+        break;
+      }
+      let applied = 0;
+      for (const op of payload.ops) {
+        const ok = await storeGossipGroupStateOp(op, msg.hubId);
+        if (ok) applied++;
+      }
+      if (applied > 0) {
+        console.log(
+          `Applied ${applied}/${payload.ops.length} group state ops from ${msg.hubId}`
+        );
+        gossipMessagesStoredTotal.inc({ kind: "group_state_op" }, applied);
+        await incrementPeerMessageCount(msg.hubId, applied);
       }
       break;
     }

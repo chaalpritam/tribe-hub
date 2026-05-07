@@ -42,7 +42,7 @@ export const gossipFramesDroppedTotal = new Counter({
 
 export const gossipMessagesStoredTotal = new Counter({
   name: "tribe_hub_gossip_messages_stored_total",
-  help: "Messages successfully stored from gossip, by kind (tweet|dm|group_create|group_msg)",
+  help: "Messages successfully stored from gossip, by kind (tweet|dm|group_create|group_msg|group_state_op)",
   labelNames: ["kind"] as const,
   registers: [registry],
 });

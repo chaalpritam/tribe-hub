@@ -8,6 +8,7 @@ import {
   gossipDmKey,
   gossipGroupCreate,
   gossipGroupMessage,
+  gossipGroupStateOp,
 } from "../../gossip/protocol";
 
 import { MessageType } from "../../messages/types";
@@ -583,6 +584,16 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
         [body.group_id, message.data.tid]
       );
 
+      gossipGroupStateOp({
+        hash: message.hash,
+        type: DM_GROUP_LEAVE,
+        groupId: body.group_id,
+        signerTid: String(message.data.tid),
+        signature: message.signature,
+        signer: message.signer,
+        dataB64: message.dataB64,
+      });
+
       return { ok: true };
     }
   );
@@ -640,6 +651,17 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
          ON CONFLICT (group_id, tid) DO NOTHING`,
         [body.group_id, newTid]
       );
+
+      gossipGroupStateOp({
+        hash: message.hash,
+        type: DM_GROUP_ADD_MEMBER,
+        groupId: body.group_id,
+        signerTid: String(message.data.tid),
+        targetTid: String(newTid),
+        signature: message.signature,
+        signer: message.signer,
+        dataB64: message.dataB64,
+      });
 
       return { ok: true };
     }
@@ -701,6 +723,17 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
         [body.group_id, targetTid]
       );
 
+      gossipGroupStateOp({
+        hash: message.hash,
+        type: DM_GROUP_REMOVE_MEMBER,
+        groupId: body.group_id,
+        signerTid: String(message.data.tid),
+        targetTid: String(targetTid),
+        signature: message.signature,
+        signer: message.signer,
+        dataB64: message.dataB64,
+      });
+
       return { ok: true };
     }
   );
@@ -741,6 +774,16 @@ export async function dmRoutes(server: FastifyInstance): Promise<void> {
       }
 
       await db.query(`DELETE FROM dm_groups WHERE id = $1`, [body.group_id]);
+
+      gossipGroupStateOp({
+        hash: message.hash,
+        type: DM_GROUP_DELETE,
+        groupId: body.group_id,
+        signerTid: String(message.data.tid),
+        signature: message.signature,
+        signer: message.signer,
+        dataB64: message.dataB64,
+      });
 
       return { ok: true };
     }

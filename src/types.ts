@@ -75,6 +75,7 @@ export interface GossipEnvelope {
     | "group_msg"
     | "group_msg_have"
     | "group_msg_want"
+    | "group_state_op"
     | "ping"
     | "pong";
   hubId: string;
@@ -153,6 +154,30 @@ export interface GroupCreatePayload {
 
 export interface GroupMsgPayload {
   messages: GossipGroupMsg[];
+}
+
+/**
+ * State-changing group op (LEAVE / ADD_MEMBER / REMOVE_MEMBER / DELETE).
+ * The originating hub already enforced creator-only / not-creator
+ * authorization rules before signing; the receiver just verifies the
+ * envelope and applies idempotently. Body specifics live inside the
+ * signed dataB64; type and projected fields are surfaced for fast
+ * dispatch without forcing every hub to decode dataB64 up-front.
+ */
+export interface GossipGroupStateOp {
+  hash: string;
+  type: number; // matches MessageType (29 leave, 30 add, 31 remove, 32 delete)
+  groupId: string;
+  signerTid: string;
+  /** Set for ADD_MEMBER (30) and REMOVE_MEMBER (31); ignored otherwise. */
+  targetTid?: string;
+  signature: string;
+  signer: string;
+  dataB64?: string;
+}
+
+export interface GroupStateOpPayload {
+  ops: GossipGroupStateOp[];
 }
 
 export interface HelloPayload {
