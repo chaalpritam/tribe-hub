@@ -70,7 +70,11 @@ export interface GossipEnvelope {
     | "dm_want"
     | "dm_key"
     | "group_create"
+    | "group_create_have"
+    | "group_create_want"
     | "group_msg"
+    | "group_msg_have"
+    | "group_msg_want"
     | "ping"
     | "pong";
   hubId: string;

@@ -768,6 +768,199 @@ export async function storeGossipGroupMsg(
   }
 }
 
+/** Recent group create hashes for catch-up gossip. */
+export async function getGroupCreateHashes(
+  since: Date,
+  limit: number
+): Promise<string[]> {
+  const result = await db.query(
+    `SELECT hash FROM dm_groups
+     WHERE created_at > $1
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [since, limit]
+  );
+  return result.rows.map((r: { hash: string }) => r.hash);
+}
+
+/** created_at of a single group-create hash (for cursor advance). */
+export async function getGroupCreateHashTimestamp(
+  hash: string
+): Promise<Date | null> {
+  const result = await db.query(
+    `SELECT created_at FROM dm_groups WHERE hash = $1`,
+    [hash]
+  );
+  if (result.rows.length === 0) return null;
+  const ts = result.rows[0].created_at;
+  return ts instanceof Date ? ts : new Date(ts);
+}
+
+/** Subset of input hashes we don't yet have in dm_groups. */
+export async function findMissingGroupCreateHashes(
+  hashes: string[]
+): Promise<string[]> {
+  if (hashes.length === 0) return [];
+  const result = await db.query(
+    `SELECT hash FROM dm_groups WHERE hash = ANY($1)`,
+    [hashes]
+  );
+  const existing = new Set(result.rows.map((r: { hash: string }) => r.hash));
+  return hashes.filter((h) => !existing.has(h));
+}
+
+/** Pull group creates by envelope hash for a group_create reply. */
+export async function getGroupCreatesByHashes(
+  hashes: string[]
+): Promise<GossipGroupCreate[]> {
+  if (hashes.length === 0) return [];
+  const [groups, envelopes] = await Promise.all([
+    db.query(
+      `SELECT g.id, g.name, g.creator_tid, g.hash, g.signature, g.signer,
+              ARRAY(
+                SELECT m.tid::text
+                FROM dm_group_members m
+                WHERE m.group_id = g.id
+                ORDER BY m.joined_at
+              ) AS member_tids
+       FROM dm_groups g
+       WHERE g.hash = ANY($1)`,
+      [hashes]
+    ),
+    getSignedEnvelopes(hashes),
+  ]);
+  return groups.rows.map(
+    (r: {
+      id: string;
+      name: string;
+      creator_tid: string;
+      hash: string;
+      signature: string;
+      signer: string;
+      member_tids: string[];
+    }) => ({
+      hash: r.hash,
+      groupId: r.id,
+      name: r.name,
+      creatorTid: r.creator_tid.toString(),
+      memberTids: r.member_tids ?? [],
+      signature: r.signature,
+      signer: r.signer,
+      dataB64: envelopes.get(r.hash),
+    })
+  );
+}
+
+/** Recent group message hashes for catch-up gossip. */
+export async function getGroupMsgHashes(
+  since: Date,
+  limit: number
+): Promise<string[]> {
+  const result = await db.query(
+    `SELECT hash FROM dm_group_messages
+     WHERE created_at > $1
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [since, limit]
+  );
+  return result.rows.map((r: { hash: string }) => r.hash);
+}
+
+/** created_at of a single group-message hash (for cursor advance). */
+export async function getGroupMsgHashTimestamp(
+  hash: string
+): Promise<Date | null> {
+  const result = await db.query(
+    `SELECT created_at FROM dm_group_messages WHERE hash = $1`,
+    [hash]
+  );
+  if (result.rows.length === 0) return null;
+  const ts = result.rows[0].created_at;
+  return ts instanceof Date ? ts : new Date(ts);
+}
+
+/** Subset of input hashes we don't yet have in dm_group_messages. */
+export async function findMissingGroupMsgHashes(
+  hashes: string[]
+): Promise<string[]> {
+  if (hashes.length === 0) return [];
+  const result = await db.query(
+    `SELECT hash FROM dm_group_messages WHERE hash = ANY($1)`,
+    [hashes]
+  );
+  const existing = new Set(result.rows.map((r: { hash: string }) => r.hash));
+  return hashes.filter((h) => !existing.has(h));
+}
+
+/**
+ * Pull group messages + their per-recipient ciphertexts for a
+ * group_msg reply. We aggregate the ciphertext rows per envelope so
+ * the receiver gets the same payload shape gossipGroupMessage emits.
+ */
+export async function getGroupMsgsByHashes(
+  hashes: string[]
+): Promise<GossipGroupMsg[]> {
+  if (hashes.length === 0) return [];
+  const [msgs, ciphers, envelopes] = await Promise.all([
+    db.query(
+      `SELECT hash, group_id, sender_tid, sender_x25519, timestamp,
+              signature, signer
+       FROM dm_group_messages
+       WHERE hash = ANY($1)`,
+      [hashes]
+    ),
+    db.query(
+      `SELECT envelope_hash, recipient_tid, ciphertext, nonce
+       FROM dm_group_ciphertexts
+       WHERE envelope_hash = ANY($1)`,
+      [hashes]
+    ),
+    getSignedEnvelopes(hashes),
+  ]);
+
+  const ciphersByHash = new Map<
+    string,
+    Array<{ recipientTid: string; ciphertext: string; nonce: string }>
+  >();
+  for (const c of ciphers.rows as Array<{
+    envelope_hash: string;
+    recipient_tid: string;
+    ciphertext: string;
+    nonce: string;
+  }>) {
+    const list = ciphersByHash.get(c.envelope_hash) ?? [];
+    list.push({
+      recipientTid: c.recipient_tid.toString(),
+      ciphertext: c.ciphertext,
+      nonce: c.nonce,
+    });
+    ciphersByHash.set(c.envelope_hash, list);
+  }
+
+  return msgs.rows.map(
+    (r: {
+      hash: string;
+      group_id: string;
+      sender_tid: string;
+      sender_x25519: string;
+      timestamp: Date | string;
+      signature: string;
+      signer: string;
+    }) => ({
+      hash: r.hash,
+      groupId: r.group_id,
+      senderTid: r.sender_tid.toString(),
+      senderX25519: r.sender_x25519,
+      timestamp:
+        r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
+      ciphertexts: ciphersByHash.get(r.hash) ?? [],
+      signature: r.signature,
+      signer: r.signer,
+      dataB64: envelopes.get(r.hash),
+    })
+  );
+}
+
 /** Pull DMs by hash for sending in a dm_messages envelope. */
 export async function getDmsByHashes(hashes: string[]): Promise<GossipDm[]> {
   if (hashes.length === 0) return [];

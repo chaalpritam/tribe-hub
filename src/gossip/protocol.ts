@@ -31,6 +31,14 @@ import {
   storeGossipDmKey,
   storeGossipGroupCreate,
   storeGossipGroupMsg,
+  getGroupCreateHashes,
+  getGroupCreateHashTimestamp,
+  findMissingGroupCreateHashes,
+  getGroupCreatesByHashes,
+  getGroupMsgHashes,
+  getGroupMsgHashTimestamp,
+  findMissingGroupMsgHashes,
+  getGroupMsgsByHashes,
   getDmHashes,
   getDmHashTimestamp,
   getDmsByHashes,
@@ -192,6 +200,54 @@ export async function broadcastHaveSince(
       if (dmHashes.length < config.maxSyncBatchSize) break;
       const dmTs = await getDmHashTimestamp(dmHashes[dmHashes.length - 1]);
       dmCursor = dmTs ? new Date(dmTs.getTime() + 1) : new Date();
+    }
+
+    // Mirror for group creates.
+    let gcCursor = since;
+    for (let i = 0; i < 100; i++) {
+      const gcHashes = await getGroupCreateHashes(
+        gcCursor,
+        config.maxSyncBatchSize
+      );
+      if (gcHashes.length === 0) break;
+      send(ws, {
+        type: "group_create_have",
+        hubId: config.hubId,
+        payload: {
+          hashes: gcHashes,
+          since: gcCursor.toISOString(),
+        } as HavePayload,
+      });
+      total += gcHashes.length;
+      if (gcHashes.length < config.maxSyncBatchSize) break;
+      const gcTs = await getGroupCreateHashTimestamp(
+        gcHashes[gcHashes.length - 1]
+      );
+      gcCursor = gcTs ? new Date(gcTs.getTime() + 1) : new Date();
+    }
+
+    // Mirror for group messages.
+    let gmCursor = since;
+    for (let i = 0; i < 100; i++) {
+      const gmHashes = await getGroupMsgHashes(
+        gmCursor,
+        config.maxSyncBatchSize
+      );
+      if (gmHashes.length === 0) break;
+      send(ws, {
+        type: "group_msg_have",
+        hubId: config.hubId,
+        payload: {
+          hashes: gmHashes,
+          since: gmCursor.toISOString(),
+        } as HavePayload,
+      });
+      total += gmHashes.length;
+      if (gmHashes.length < config.maxSyncBatchSize) break;
+      const gmTs = await getGroupMsgHashTimestamp(
+        gmHashes[gmHashes.length - 1]
+      );
+      gmCursor = gmTs ? new Date(gmTs.getTime() + 1) : new Date();
     }
 
     if (total > 0) sent.push(hubId);
@@ -424,6 +480,38 @@ async function handlePeerMessage(
           } as HavePayload,
         });
       }
+
+      // Group catch-up. Creates first so the receiver has the FK
+      // anchor before we ship messages — even though net ordering
+      // can still flip the apply order, this minimizes the window.
+      const groupCreateHashes = await getGroupCreateHashes(
+        lastSync,
+        config.maxSyncBatchSize
+      );
+      if (groupCreateHashes.length > 0) {
+        send(ws, {
+          type: "group_create_have",
+          hubId: config.hubId,
+          payload: {
+            hashes: groupCreateHashes,
+            since: lastSync.toISOString(),
+          } as HavePayload,
+        });
+      }
+      const groupMsgHashes = await getGroupMsgHashes(
+        lastSync,
+        config.maxSyncBatchSize
+      );
+      if (groupMsgHashes.length > 0) {
+        send(ws, {
+          type: "group_msg_have",
+          hubId: config.hubId,
+          payload: {
+            hashes: groupMsgHashes,
+            since: lastSync.toISOString(),
+          } as HavePayload,
+        });
+      }
       break;
     }
 
@@ -536,6 +624,62 @@ async function handlePeerMessage(
       const payload = msg.payload as DmKeyPayload;
       if (!payload?.tid || !payload?.x25519Pubkey) break;
       await storeGossipDmKey(payload.tid, payload.x25519Pubkey);
+      break;
+    }
+
+    case "group_create_have": {
+      const payload = msg.payload as HavePayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
+      const missing = await findMissingGroupCreateHashes(payload.hashes);
+      if (missing.length > 0) {
+        send(ws, {
+          type: "group_create_want",
+          hubId: config.hubId,
+          payload: { hashes: missing } as WantPayload,
+        });
+      }
+      break;
+    }
+
+    case "group_create_want": {
+      const payload = msg.payload as WantPayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
+      const groups = await getGroupCreatesByHashes(payload.hashes);
+      if (groups.length > 0) {
+        send(ws, {
+          type: "group_create",
+          hubId: config.hubId,
+          payload: { groups } as GroupCreatePayload,
+        });
+      }
+      break;
+    }
+
+    case "group_msg_have": {
+      const payload = msg.payload as HavePayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
+      const missing = await findMissingGroupMsgHashes(payload.hashes);
+      if (missing.length > 0) {
+        send(ws, {
+          type: "group_msg_want",
+          hubId: config.hubId,
+          payload: { hashes: missing } as WantPayload,
+        });
+      }
+      break;
+    }
+
+    case "group_msg_want": {
+      const payload = msg.payload as WantPayload;
+      if (!Array.isArray(payload.hashes) || payload.hashes.length > 1000) break;
+      const messages = await getGroupMsgsByHashes(payload.hashes);
+      if (messages.length > 0) {
+        send(ws, {
+          type: "group_msg",
+          hubId: config.hubId,
+          payload: { messages } as GroupMsgPayload,
+        });
+      }
       break;
     }
 
