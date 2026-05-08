@@ -68,38 +68,45 @@ export async function tipRoutes(server: FastifyInstance): Promise<void> {
 
   // ── On-chain mirror: TipRecord PDAs from tip-registry ──────────────
 
-  // Tips a TID has sent on chain.
+  // Tips a TID has sent on chain. Joins the recipient's username so
+  // the profile can render @name.tribe without a per-row round-trip
+  // (mirrors the join already on /v1/tips/onchain/target/:hash).
   server.get<{
     Params: { tid: string };
     Querystring: { limit?: string };
   }>("/v1/tips/onchain/sent/:tid", async (request) => {
     const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
     const result = await db.query(
-      `SELECT pda, sender, recipient, sender_tid, recipient_tid,
-              amount, tip_id, target_hash, has_target,
-              tx_signature, created_at
-       FROM onchain_tip_records
-       WHERE sender_tid = $1
-       ORDER BY created_at DESC
+      `SELECT t.pda, t.sender, t.recipient, t.sender_tid, t.recipient_tid,
+              t.amount, t.tip_id, t.target_hash, t.has_target,
+              t.tx_signature, t.created_at,
+              ti.username AS counterparty_username
+       FROM onchain_tip_records t
+       LEFT JOIN tids ti ON ti.tid = t.recipient_tid
+       WHERE t.sender_tid = $1
+       ORDER BY t.created_at DESC
        LIMIT $2`,
       [request.params.tid, limit]
     );
     return { tips: result.rows };
   });
 
-  // Tips a TID has received on chain.
+  // Tips a TID has received on chain. Joins the sender's username
+  // so received-tip rows can show who sent without a second hop.
   server.get<{
     Params: { tid: string };
     Querystring: { limit?: string };
   }>("/v1/tips/onchain/received/:tid", async (request) => {
     const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
     const result = await db.query(
-      `SELECT pda, sender, recipient, sender_tid, recipient_tid,
-              amount, tip_id, target_hash, has_target,
-              tx_signature, created_at
-       FROM onchain_tip_records
-       WHERE recipient_tid = $1
-       ORDER BY created_at DESC
+      `SELECT t.pda, t.sender, t.recipient, t.sender_tid, t.recipient_tid,
+              t.amount, t.tip_id, t.target_hash, t.has_target,
+              t.tx_signature, t.created_at,
+              ti.username AS counterparty_username
+       FROM onchain_tip_records t
+       LEFT JOIN tids ti ON ti.tid = t.sender_tid
+       WHERE t.recipient_tid = $1
+       ORDER BY t.created_at DESC
        LIMIT $2`,
       [request.params.tid, limit]
     );
