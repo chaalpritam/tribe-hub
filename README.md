@@ -292,6 +292,17 @@ Point each hub at the other via the `PEERS` env var:
 
 Both hubs will continuously sync. See `deploy/setup-node.sh` in the root repo for automated setup.
 
+## Related Repos
+
+| Repo | Description |
+|------|-------------|
+| [tribe-protocol](../tribe-protocol) | Solana programs (Anchor) — identity, app keys, social graph |
+| [tribe-sdk](../tribe-sdk) | TypeScript SDK |
+| [tribe-er-server](../tribe-er-server) | Ephemeral Rollup sequencer — instant follows |
+| [tribe-app](../tribe-app) | Next.js frontend reference client |
+| [tribeapp.wtf](../tribeapp.wtf) | Consumer-facing web app |
+| [tribe-ios](../tribe-ios) | Native SwiftUI iOS client |
+
 ## License
 
 MIT
