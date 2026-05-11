@@ -465,36 +465,68 @@ describe("GET /v1/replies", () => {
 // Social endpoints
 // ===========================================================================
 describe("GET /v1/followers/:tid", () => {
-  it("returns followers list", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [
-        { follower_tid: "10", created_at: new Date(), username: "alice", custody_address: "abc" },
-      ],
-    });
+  it("returns followers as canonical users", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ follower_tid: "10" }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            tid: "10",
+            custody_address: "abc",
+            recovery_address: null,
+            registered_at: null,
+            username: "alice",
+            following_count: "0",
+            followers_count: "1",
+            display_name: null,
+            pfp_url: null,
+            bio: null,
+            profile: {},
+          },
+        ],
+      });
 
     const res = await server.inject({ method: "GET", url: "/v1/followers/42" });
     const body = JSON.parse(res.body);
 
     expect(res.statusCode).toBe(200);
-    expect(body.followers).toHaveLength(1);
-    expect(body.followers[0].follower_tid).toBe("10");
+    expect(body.users).toHaveLength(1);
+    expect(body.users[0].tid).toBe("10");
+    expect(body.users[0].username).toBe("alice");
+    expect(body.total).toBe(1);
   });
 });
 
 describe("GET /v1/following/:tid", () => {
-  it("returns following list", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [
-        { following_tid: "20", created_at: new Date(), username: "bob", custody_address: "def" },
-      ],
-    });
+  it("returns following as canonical users", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ following_tid: "20" }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            tid: "20",
+            custody_address: "def",
+            recovery_address: null,
+            registered_at: null,
+            username: "bob",
+            following_count: "0",
+            followers_count: "0",
+            display_name: null,
+            pfp_url: null,
+            bio: null,
+            profile: {},
+          },
+        ],
+      });
 
     const res = await server.inject({ method: "GET", url: "/v1/following/42" });
     const body = JSON.parse(res.body);
 
     expect(res.statusCode).toBe(200);
-    expect(body.following).toHaveLength(1);
-    expect(body.following[0].following_tid).toBe("20");
+    expect(body.users).toHaveLength(1);
+    expect(body.users[0].tid).toBe("20");
+    expect(body.users[0].username).toBe("bob");
+    expect(body.total).toBe(1);
   });
 });
 
