@@ -269,4 +269,48 @@ export async function userRoutes(server: FastifyInstance): Promise<void> {
     );
     return { tweets: result.rows };
   });
+
+  // Reverse lookup: wallet (Solana custody address) → TID(s). Used by
+  // iOS seed-phrase sign-in to find the TID a freshly-derived Solana
+  // keypair owns, without dragging a wallet adapter onto the device.
+  // Returns canonical /v1/user-shaped rows under `users` (same shape
+  // as /v1/users) so callers reuse the user list decoder.
+  server.get<{
+    Params: { address: string };
+  }>("/v1/tid-by-wallet/:address", async (request, reply) => {
+    const address = request.params.address;
+    // Base58 Solana addresses are 32-44 chars. Fail fast on anything
+    // that obviously can't be one so we don't take a SQL trip on a
+    // typo'd input.
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+      return reply.status(400).send({ error: "Invalid Solana address" });
+    }
+    const result = await db.query(
+      `SELECT f.tid, f.custody_address, f.recovery_address, f.registered_at, f.username,
+              (SELECT COUNT(*) FROM social_graph WHERE follower_tid = f.tid AND deleted_at IS NULL)::text as following_count,
+              (SELECT COUNT(*) FROM social_graph WHERE following_tid = f.tid AND deleted_at IS NULL)::text as followers_count,
+              (SELECT value FROM user_data
+                 WHERE tid = f.tid AND field = 'displayName'
+                 ORDER BY timestamp DESC LIMIT 1) AS display_name,
+              (SELECT value FROM user_data
+                 WHERE tid = f.tid AND field = 'pfpUrl'
+                 ORDER BY timestamp DESC LIMIT 1) AS pfp_url,
+              (SELECT value FROM user_data
+                 WHERE tid = f.tid AND field = 'bio'
+                 ORDER BY timestamp DESC LIMIT 1) AS bio,
+              COALESCE(
+                (SELECT jsonb_object_agg(field, value)
+                   FROM (SELECT DISTINCT ON (field) field, value
+                           FROM user_data
+                           WHERE tid = f.tid
+                           ORDER BY field, timestamp DESC) latest),
+                '{}'::jsonb
+              ) AS profile
+       FROM tids f
+       WHERE f.custody_address = $1
+       ORDER BY f.registered_at ASC`,
+      [address],
+    );
+    return { users: result.rows, total: result.rows.length };
+  });
 }

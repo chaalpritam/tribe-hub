@@ -580,6 +580,64 @@ describe("GET /v1/user/:tid", () => {
   });
 });
 
+describe("GET /v1/tid-by-wallet/:address", () => {
+  it("rejects malformed addresses with 400", async () => {
+    const res = await server.inject({
+      method: "GET",
+      url: "/v1/tid-by-wallet/not-a-real-address",
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns canonical user row(s) for the wallet", async () => {
+    const validAddress = "11111111111111111111111111111111";
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          tid: "77",
+          custody_address: validAddress,
+          recovery_address: null,
+          registered_at: null,
+          username: "carol",
+          following_count: "0",
+          followers_count: "0",
+          display_name: null,
+          pfp_url: null,
+          bio: null,
+          profile: {},
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: "GET",
+      url: `/v1/tid-by-wallet/${validAddress}`,
+    });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.users).toHaveLength(1);
+    expect(body.users[0].tid).toBe("77");
+    expect(body.users[0].username).toBe("carol");
+    expect(body.total).toBe(1);
+  });
+
+  it("returns empty list when no TID is registered to the wallet", async () => {
+    const validAddress = "11111111111111111111111111111111";
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const res = await server.inject({
+      method: "GET",
+      url: `/v1/tid-by-wallet/${validAddress}`,
+    });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.users).toEqual([]);
+    expect(body.total).toBe(0);
+  });
+});
+
 // ===========================================================================
 // Peers endpoints
 // ===========================================================================
