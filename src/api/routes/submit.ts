@@ -51,6 +51,7 @@ const ALLOWED_USER_DATA_FIELDS = new Set([
   "bio",
   "displayName",
   "pfpUrl",
+  "coverUrl",
   "url",
   "location",
   "city",
