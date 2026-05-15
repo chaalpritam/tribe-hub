@@ -7,16 +7,39 @@ import { db } from "../../storage/db";
 /// deletes expired rows hourly so these endpoints can use a simple
 /// `expires_at > now()` filter without joining elapsed-time math.
 export async function storyRoutes(server: FastifyInstance): Promise<void> {
-  // Active stories across all authors, grouped by author and newest
-  // first per author. Used by the stories tray on the home feed.
+  // Active stories grouped by author, newest-first within each.
   //
-  // Phase 4 will add a `?viewer_tid=...` follow-graph filter so the
-  // tray only shows authors I follow + my own; for now everyone's
-  // active stories are visible to make the demo feel populated.
+  // viewer_tid (optional) flips on follow-graph filtering: when set,
+  // only stories from authors the viewer follows + the viewer's own
+  // stories surface. Omit it (or pass an unparseable value) to see
+  // every active story — useful for the demo, for the public landing
+  // page, and as a fallback while the iOS app's onboarding still
+  // hasn't populated the user's TID.
   server.get<{
-    Querystring: { limit?: string };
+    Querystring: { limit?: string; viewer_tid?: string };
   }>("/v1/stories", async (request) => {
     const limit = Math.min(parseInt(request.query.limit || "100", 10), 200);
+    const viewerRaw = request.query.viewer_tid;
+    const viewerTid = viewerRaw ? parseInt(viewerRaw, 10) : null;
+    const useFilter = viewerTid !== null && !Number.isNaN(viewerTid);
+
+    const params: (number | null)[] = [limit];
+    let filterClause = "";
+    if (useFilter) {
+      filterClause = `
+        AND (
+          s.author_tid = $2
+          OR EXISTS (
+            SELECT 1 FROM social_graph sg
+            WHERE sg.follower_tid = $2
+              AND sg.following_tid = s.author_tid
+              AND sg.deleted_at IS NULL
+          )
+        )
+      `;
+      params.push(viewerTid);
+    }
+
     const result = await db.query(
       `SELECT s.hash, s.author_tid, s.media_hash, s.caption, s.music,
               s.created_at, s.expires_at,
@@ -27,9 +50,10 @@ export async function storyRoutes(server: FastifyInstance): Promise<void> {
          FROM stories s
          LEFT JOIN tids t ON t.tid = s.author_tid
         WHERE s.expires_at > NOW()
+        ${filterClause}
         ORDER BY s.author_tid, s.created_at DESC
         LIMIT $1`,
-      [limit]
+      params
     );
     return { stories: result.rows };
   });
