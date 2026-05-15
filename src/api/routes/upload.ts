@@ -3,12 +3,26 @@ import multipart from "@fastify/multipart";
 import { mediaStore } from "../../storage/media-store";
 import { config } from "../../config";
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+// Separate caps per media kind. Photos are quick to display and we
+// don't want a 50 MB JPEG from a misbehaving client; reels are
+// inherently larger and need headroom — 100 MB covers ~1 minute of
+// 1080p H.264 at sane bitrates.
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;     // 5MB
+const MAX_VIDEO_SIZE = 100 * 1024 * 1024;   // 100MB
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/quicktime"];
+const ALLOWED_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_VIDEO_TYPES];
+
+function maxSizeFor(mimetype: string): number {
+  return ALLOWED_VIDEO_TYPES.includes(mimetype) ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+}
 
 export async function uploadRoutes(server: FastifyInstance): Promise<void> {
   await server.register(multipart, {
-    limits: { fileSize: MAX_FILE_SIZE },
+    // Multipart needs an upper bound at register time — set it to the
+    // video cap so a legitimate reel upload doesn't 413 before the
+    // route handler can branch on mimetype.
+    limits: { fileSize: MAX_VIDEO_SIZE },
   });
 
   server.post("/v1/upload", {
@@ -36,8 +50,12 @@ export async function uploadRoutes(server: FastifyInstance): Promise<void> {
     }
     const data = Buffer.concat(chunks);
 
-    if (data.length > MAX_FILE_SIZE) {
-      return reply.status(400).send({ error: "File too large (max 5MB)" });
+    const cap = maxSizeFor(file.mimetype);
+    if (data.length > cap) {
+      const mb = (cap / (1024 * 1024)).toFixed(0);
+      return reply.status(400).send({
+        error: `File too large for ${file.mimetype} (max ${mb}MB)`,
+      });
     }
 
     const hash = await mediaStore.store(data, file.mimetype);
