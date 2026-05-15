@@ -16,7 +16,7 @@ export async function reelsRoutes(server: FastifyInstance): Promise<void> {
     const params: (string | number)[] = [limit];
     let query = `
       SELECT m.hash, m.tid, m.text, m.embeds, m.timestamp,
-             m.audio_title, m.location,
+             m.audio_title, m.location, m.post_kind,
              m.channel_id,
              t.username,
              (SELECT value FROM user_data
@@ -24,7 +24,23 @@ export async function reelsRoutes(server: FastifyInstance): Promise<void> {
                 ORDER BY timestamp DESC LIMIT 1) AS display_name,
              (SELECT value FROM user_data
                 WHERE tid = m.tid AND field = 'pfpUrl'
-                ORDER BY timestamp DESC LIMIT 1) AS pfp_url
+                ORDER BY timestamp DESC LIMIT 1) AS pfp_url,
+             (SELECT COUNT(*)::int FROM messages rep
+                WHERE rep.type = 1 AND rep.parent_hash = m.hash
+                  AND NOT EXISTS (
+                    SELECT 1 FROM messages d
+                    WHERE d.type = 2 AND d.tid = rep.tid AND d.text = rep.hash
+                  )
+             ) AS reply_count,
+             (SELECT COUNT(DISTINCT r.tid)::int FROM messages r
+                WHERE r.type = 3 AND r.parent_hash = m.hash AND r.text = '1'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM messages u
+                    WHERE u.type = 4 AND u.tid = r.tid AND u.parent_hash = m.hash
+                      AND u.timestamp > r.timestamp
+                  )
+             ) AS reaction_count,
+             (SELECT COUNT(*)::int FROM bookmarks b WHERE b.target_hash = m.hash) AS bookmark_count
         FROM messages m
         LEFT JOIN tids t ON t.tid = m.tid
        WHERE m.type = 1
