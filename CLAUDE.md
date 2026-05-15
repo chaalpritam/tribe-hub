@@ -22,8 +22,19 @@ Decentralized hub for TribeEco. Combined tweet storage + Solana event indexer + 
 - `POST /v1/peers` — Add a peer at runtime `{ "url": "ws://..." }`
 - `GET /v1/sync/status` — Sync state per peer plus our own message + DM totals and a coverage % (= local store / peer total, capped at 100). Probes each peer's `/health` for their total.
 - `POST /v1/sync/trigger` — `{ peer?: "<hub-id>" | "all", sinceMs?: number }`. Calls `broadcastHaveSince` to send a wider "have" frame for everything since `Date.now() - sinceMs` (default 30d) to one connected peer or every connected peer. Used by `tribe sync --peer …`.
+- `GET /v1/stories` — Active stories across all authors (24h TTL); grouped by author, newest-first within
+- `GET /v1/stories/:tid` — One user's active stories, oldest-first (story-pager order)
+- `GET /v1/stories/:hash/viewers` — "Seen by" list; pass `?viewer_tid=` to self-gate (non-author requests get 403)
+- `GET /v1/reels` — Paginated feed of `post_kind='reel'` tweets, newest-first
 - `GET /gossip` — WebSocket endpoint for hub-to-hub gossip
 - `GET /v1/ws` — WebSocket endpoint for client real-time updates
+
+## Stories + Reels (Phase 3)
+
+- Stories live as `STORY_ADD = 33` envelopes → `stories` table with hub-stamped `expires_at = created_at + 24h`. Hourly `DELETE WHERE expires_at < now()` cron in `src/storage/stories-cleanup.ts` reaps expired rows; `story_views` (`STORY_VIEW = 34`) cascades.
+- Reels are `TWEET_ADD` with `body.post_kind='reel'`. Same envelope kind as a plain tweet so reactions / replies / bookmarks all work for free; `/v1/reels` filters on the column.
+- `/v1/upload` accepts `image/jpeg`, `image/png`, `image/gif`, `image/webp` up to 5 MB; `video/mp4` and `video/quicktime` up to 100 MB.
+- Optional `body.location` and `body.audio_title` on TWEET_ADD persist as nullable columns on `messages`.
 
 ## Gossip Protocol
 
