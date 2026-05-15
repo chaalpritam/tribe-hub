@@ -18,6 +18,8 @@ import { tipRoutes } from "./tips";
 import { karmaRoutes } from "./karma";
 import { notificationRoutes } from "./notifications";
 import { activityRoutes } from "./activity";
+import { storyRoutes } from "./stories";
+import { reelsRoutes } from "./reels";
 
 export function registerRoutes(server: FastifyInstance): void {
   server.register(submitRoutes);
@@ -39,4 +41,6 @@ export function registerRoutes(server: FastifyInstance): void {
   server.register(karmaRoutes);
   server.register(notificationRoutes);
   server.register(activityRoutes);
+  server.register(storyRoutes);
+  server.register(reelsRoutes);
 }
