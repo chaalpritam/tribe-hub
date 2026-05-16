@@ -3,6 +3,7 @@ import { db, runMigrations } from "./storage/db";
 import { startSolanaListener } from "./solana/listener";
 import { startPeerManager } from "./gossip/peer-manager";
 import { startStoriesCleanup } from "./storage/stories-cleanup";
+import { startReelsCacheRefresh } from "./storage/reels-cache";
 import { buildServer } from "./server";
 import { getPeerCount } from "./gossip/protocol";
 import { bindRuntimeMetrics } from "./metrics";
@@ -37,6 +38,9 @@ async function main() {
 
   // 3b. Hourly purge of expired stories (24h TTL stamped at insert).
   startStoriesCleanup();
+
+  // 3c. 5-minute refresh of the engagement-ranked reels cache.
+  startReelsCacheRefresh();
 
   // 4. Start HTTP API + gossip WebSocket server
   const server = await buildServer();

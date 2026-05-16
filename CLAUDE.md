@@ -25,7 +25,7 @@ Decentralized hub for TribeEco. Combined tweet storage + Solana event indexer + 
 - `GET /v1/stories` — Active stories across all authors (24h TTL); grouped by author, newest-first within
 - `GET /v1/stories/:tid` — One user's active stories, oldest-first (story-pager order)
 - `GET /v1/stories/:hash/viewers` — "Seen by" list; pass `?viewer_tid=` to self-gate (non-author requests get 403)
-- `GET /v1/reels` — Paginated feed of `post_kind='reel'` tweets. `?sort=recent` (default) is newest-first; `?sort=engagement` ranks by `(reactions + bookmarks*2 + replies) / (hours+2)^1.5` over the last 14 days. Engagement cursors are base64url(JSON({score, hash})); recent cursors are plain timestamp strings — they're not interchangeable.
+- `GET /v1/reels` — Paginated feed of `post_kind='reel'` tweets. `?sort=recent` (default) is newest-first; `?sort=engagement` reads from `reels_engagement_cache` — top 500 reels by `(reactions + bookmarks*2 + replies) / (hours+2)^1.5` over the last 14 days, refreshed every 5 min by `src/storage/reels-cache.ts`. Engagement cursors are integer rank strings; recent cursors are plain timestamp strings — not interchangeable. Engagement falls back to a live (uncached) query when the cache is empty on the first page (~30s after boot).
 - `GET /gossip` — WebSocket endpoint for hub-to-hub gossip
 - `GET /v1/ws` — WebSocket endpoint for client real-time updates
 

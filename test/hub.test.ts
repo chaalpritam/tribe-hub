@@ -725,17 +725,17 @@ describe("GET /v1/reels", () => {
 
     expect(res.statusCode).toBe(200);
     expect(body.reels).toHaveLength(1);
-    // Default sort is ORDER BY m.timestamp DESC — no CTE wrapping.
+    // Default sort is ORDER BY m.timestamp DESC — no cache JOIN.
     const sql = mockQuery.mock.calls[0][0] as string;
     expect(sql).toContain("ORDER BY m.timestamp DESC");
-    expect(sql).not.toContain("WITH ranked");
+    expect(sql).not.toContain("reels_engagement_cache");
   });
 
-  it("ranks by engagement when sort=engagement", async () => {
+  it("engagement sort reads from the cache table", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
-        { hash: "hot", tid: "1", timestamp: Date.now(), reply_count: 3, reaction_count: 50, bookmark_count: 10, score: 12.3 },
-        { hash: "cold", tid: "2", timestamp: Date.now(), reply_count: 0, reaction_count: 1, bookmark_count: 0, score: 0.2 },
+        { hash: "hot", tid: "1", timestamp: Date.now(), reply_count: 3, reaction_count: 50, bookmark_count: 10, score: 12.3, rank: 1 },
+        { hash: "warm", tid: "2", timestamp: Date.now(), reply_count: 0, reaction_count: 1, bookmark_count: 0, score: 0.2, rank: 2 },
       ],
     });
 
@@ -744,19 +744,14 @@ describe("GET /v1/reels", () => {
 
     expect(res.statusCode).toBe(200);
     const sql = mockQuery.mock.calls[0][0] as string;
-    expect(sql).toContain("WITH ranked");
-    expect(sql).toContain("score");
-    expect(sql).toContain("ORDER BY score DESC");
-    // 14-day window is the second param after limit
-    const params = mockQuery.mock.calls[0][1] as (string | number)[];
-    expect(params[1]).toBeLessThan(Date.now());
-    expect(params[1]).toBeGreaterThan(Date.now() - 15 * 24 * 60 * 60 * 1000);
-    // Cursor is returned only when full page (limit 20); 2 rows means no cursor
-    expect(body.cursor).toBeUndefined();
+    expect(sql).toContain("JOIN reels_engagement_cache c ON c.hash = reel.hash");
+    expect(sql).toContain("ORDER BY c.rank ASC");
     expect(body.reels[0].hash).toBe("hot");
+    // 2 rows, default limit 20 → no cursor
+    expect(body.cursor).toBeUndefined();
   });
 
-  it("returns base64url cursor when engagement page is full", async () => {
+  it("returns rank cursor when engagement page is full", async () => {
     const rows = Array.from({ length: 20 }, (_, i) => ({
       hash: `h${i}`,
       tid: "1",
@@ -765,36 +760,96 @@ describe("GET /v1/reels", () => {
       reaction_count: 0,
       bookmark_count: 0,
       score: 20 - i,
+      rank: i + 1,
     }));
     mockQuery.mockResolvedValueOnce({ rows });
 
     const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement" });
     const body = JSON.parse(res.body);
 
-    expect(body.cursor).toBeDefined();
-    const decoded = JSON.parse(Buffer.from(body.cursor, "base64url").toString("utf8"));
-    expect(decoded.score).toBe(1); // last row in the page
-    expect(decoded.hash).toBe("h19");
+    expect(body.cursor).toBe("20"); // rank of the last row in the page
   });
 
-  it("paginates engagement cursor with score+hash tiebreak", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
+  it("paginates engagement by rank cursor", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ hash: "x", rank: 25 }] });
 
-    const cursor = Buffer.from(JSON.stringify({ score: 5.5, hash: "abc" }), "utf8").toString("base64url");
-    await server.inject({ method: "GET", url: `/v1/reels?sort=engagement&cursor=${encodeURIComponent(cursor)}` });
+    await server.inject({ method: "GET", url: "/v1/reels?sort=engagement&cursor=20" });
 
     const sql = mockQuery.mock.calls[0][0] as string;
-    expect(sql).toContain("score < $3");
-    expect(sql).toContain("hash > $4");
+    expect(sql).toContain("c.rank > $2");
     const params = mockQuery.mock.calls[0][1] as (string | number)[];
-    expect(params[2]).toBe(5.5);
-    expect(params[3]).toBe("abc");
+    expect(params[1]).toBe(20);
   });
 
-  it("rejects invalid engagement cursor", async () => {
-    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement&cursor=not-a-cursor" });
+  it("rejects non-integer engagement cursor", async () => {
+    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement&cursor=abc" });
     expect(res.statusCode).toBe(400);
-    // db.query should never be reached for an invalid cursor
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("falls back to live ranking when cache is empty on first page", async () => {
+    // First call (cache lookup) returns empty.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    // Second call (live fallback) returns one row.
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ hash: "fresh", tid: "1", timestamp: Date.now(), score: 0.5 }],
+    });
+
+    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement" });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    // Live fallback computes score inline, no cache table.
+    const liveSql = mockQuery.mock.calls[1][0] as string;
+    expect(liveSql).toContain("POWER");
+    expect(liveSql).not.toContain("reels_engagement_cache");
+    expect(body.reels[0].hash).toBe("fresh");
+    // Fallback mode never returns a cursor.
+    expect(body.cursor).toBeUndefined();
+  });
+
+  it("does NOT fall back to live ranking when paginating past empty page", async () => {
+    // Cache returns empty for cursor=100 — legitimate "end of cache".
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement&cursor=100" });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockQuery).toHaveBeenCalledTimes(1); // no fallback
+    expect(body.reels).toHaveLength(0);
+    expect(body.cursor).toBeUndefined();
+  });
+});
+
+describe("reels engagement cache refresh", () => {
+  it("computes top-N reels and writes the ranking in one transaction", async () => {
+    // db.connect() returns a PoolClient with .query/.release;
+    // refreshReelsEngagementCache uses BEGIN / TRUNCATE / INSERT / COMMIT.
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // TRUNCATE
+      .mockResolvedValueOnce({ rowCount: 42, rows: [] }) // INSERT...SELECT
+      .mockResolvedValueOnce({ rows: [] }); // COMMIT
+    const clientRelease = vi.fn();
+
+    const dbMod = await import("../src/storage/db");
+    (dbMod.db as unknown as { connect: ReturnType<typeof vi.fn> }).connect = vi
+      .fn()
+      .mockResolvedValue({ query: clientQuery, release: clientRelease });
+
+    const { refreshReelsEngagementCache } = await import("../src/storage/reels-cache");
+    const rowCount = await refreshReelsEngagementCache();
+
+    expect(rowCount).toBe(42);
+    expect(clientQuery.mock.calls[0][0]).toBe("BEGIN");
+    expect(clientQuery.mock.calls[1][0]).toBe("TRUNCATE reels_engagement_cache");
+    const insertSql = clientQuery.mock.calls[2][0] as string;
+    expect(insertSql).toContain("INSERT INTO reels_engagement_cache");
+    expect(insertSql).toContain("ROW_NUMBER() OVER (ORDER BY score DESC, hash ASC)");
+    expect(clientQuery.mock.calls[3][0]).toBe("COMMIT");
+    expect(clientRelease).toHaveBeenCalled();
   });
 });
