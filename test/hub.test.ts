@@ -711,3 +711,90 @@ describe("GET /v1/sync/status", () => {
     expect(body.syncStates).toHaveLength(1);
   });
 });
+
+describe("GET /v1/reels", () => {
+  it("defaults to chronological sort", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { hash: "r1", tid: "1", timestamp: 1000, reply_count: 0, reaction_count: 0, bookmark_count: 0 },
+      ],
+    });
+
+    const res = await server.inject({ method: "GET", url: "/v1/reels" });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.reels).toHaveLength(1);
+    // Default sort is ORDER BY m.timestamp DESC — no CTE wrapping.
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("ORDER BY m.timestamp DESC");
+    expect(sql).not.toContain("WITH ranked");
+  });
+
+  it("ranks by engagement when sort=engagement", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { hash: "hot", tid: "1", timestamp: Date.now(), reply_count: 3, reaction_count: 50, bookmark_count: 10, score: 12.3 },
+        { hash: "cold", tid: "2", timestamp: Date.now(), reply_count: 0, reaction_count: 1, bookmark_count: 0, score: 0.2 },
+      ],
+    });
+
+    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement" });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("WITH ranked");
+    expect(sql).toContain("score");
+    expect(sql).toContain("ORDER BY score DESC");
+    // 14-day window is the second param after limit
+    const params = mockQuery.mock.calls[0][1] as (string | number)[];
+    expect(params[1]).toBeLessThan(Date.now());
+    expect(params[1]).toBeGreaterThan(Date.now() - 15 * 24 * 60 * 60 * 1000);
+    // Cursor is returned only when full page (limit 20); 2 rows means no cursor
+    expect(body.cursor).toBeUndefined();
+    expect(body.reels[0].hash).toBe("hot");
+  });
+
+  it("returns base64url cursor when engagement page is full", async () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({
+      hash: `h${i}`,
+      tid: "1",
+      timestamp: Date.now(),
+      reply_count: 0,
+      reaction_count: 0,
+      bookmark_count: 0,
+      score: 20 - i,
+    }));
+    mockQuery.mockResolvedValueOnce({ rows });
+
+    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement" });
+    const body = JSON.parse(res.body);
+
+    expect(body.cursor).toBeDefined();
+    const decoded = JSON.parse(Buffer.from(body.cursor, "base64url").toString("utf8"));
+    expect(decoded.score).toBe(1); // last row in the page
+    expect(decoded.hash).toBe("h19");
+  });
+
+  it("paginates engagement cursor with score+hash tiebreak", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const cursor = Buffer.from(JSON.stringify({ score: 5.5, hash: "abc" }), "utf8").toString("base64url");
+    await server.inject({ method: "GET", url: `/v1/reels?sort=engagement&cursor=${encodeURIComponent(cursor)}` });
+
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("score < $3");
+    expect(sql).toContain("hash > $4");
+    const params = mockQuery.mock.calls[0][1] as (string | number)[];
+    expect(params[2]).toBe(5.5);
+    expect(params[3]).toBe("abc");
+  });
+
+  it("rejects invalid engagement cursor", async () => {
+    const res = await server.inject({ method: "GET", url: "/v1/reels?sort=engagement&cursor=not-a-cursor" });
+    expect(res.statusCode).toBe(400);
+    // db.query should never be reached for an invalid cursor
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+});
