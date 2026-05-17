@@ -30,7 +30,24 @@ const {
   CROWDFUND_ADD,
   CROWDFUND_PLEDGE,
   TIP_ADD,
+  STORY_ADD,
+  STORY_VIEW,
 } = MessageType;
+
+// Allowed values for the post_kind discriminator on TWEET_ADD.
+// 'photo' is informational — feeds filter on embeds regardless; 'reel'
+// is what /v1/reels selects on.
+const ALLOWED_POST_KINDS = new Set(["photo", "reel"]);
+const MAX_LOCATION_LEN = 120;
+const MAX_AUDIO_TITLE_LEN = 200;
+
+// Media hashes from /v1/upload are 64-char lowercase hex (SHA-256).
+const MEDIA_HASH_RE = /^[a-f0-9]{64}$/;
+const MAX_STORY_CAPTION_LEN = 280;
+const MAX_STORY_MUSIC_LEN = 200;
+
+// Stories auto-expire 24h after creation.
+const STORY_EXPIRY_HOURS = 24;
 
 const POLL_ID_RE = /^[a-z0-9-]{1,64}$/;
 const EVENT_ID_RE = /^[a-z0-9-]{1,64}$/;
@@ -86,6 +103,9 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
           embeds?: string[];
           parent_hash?: string;
           channel_id?: string;
+          post_kind?: string;
+          location?: string;
+          audio_title?: string;
         };
         // Every tweet must belong to a channel. Compliant SDKs default
         // to the reserved "general" channel; older clients that send an
@@ -104,9 +124,34 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
         }
         // Convert mentions from string[] to number[] for BIGINT[] column
         const mentionsBigint = (tweetBody.mentions || []).map((m) => parseInt(m, 10)).filter((n) => !isNaN(n));
+
+        // Optional IG-shaped extensions — all nullable, all validated
+        // before they hit the DB. post_kind has a whitelist; location
+        // and audio_title get length caps.
+        const postKind = tweetBody.post_kind?.trim() || null;
+        if (postKind && !ALLOWED_POST_KINDS.has(postKind)) {
+          return reply.status(400).send({
+            error: `post_kind must be one of ${[...ALLOWED_POST_KINDS].join(", ")}`,
+          });
+        }
+        const location = (tweetBody.location ?? "").trim() || null;
+        if (location && location.length > MAX_LOCATION_LEN) {
+          return reply.status(400).send({
+            error: `location exceeds max length ${MAX_LOCATION_LEN}`,
+          });
+        }
+        const audioTitle = (tweetBody.audio_title ?? "").trim() || null;
+        if (audioTitle && audioTitle.length > MAX_AUDIO_TITLE_LEN) {
+          return reply.status(400).send({
+            error: `audio_title exceeds max length ${MAX_AUDIO_TITLE_LEN}`,
+          });
+        }
+
         await db.query(
-          `INSERT INTO messages (hash, tid, type, text, parent_hash, channel_id, mentions, embeds, timestamp, signature, signer)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          `INSERT INTO messages
+             (hash, tid, type, text, parent_hash, channel_id, mentions, embeds,
+              timestamp, signature, signer, post_kind, location, audio_title)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
            ON CONFLICT (hash) DO NOTHING`,
           [
             message.hash,
@@ -120,6 +165,9 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             new Date(message.data.timestamp * 1000),
             message.signature,
             message.signer,
+            postKind,
+            location,
+            audioTitle,
           ]
         );
         break;
@@ -756,6 +804,78 @@ export async function submitRoutes(server: FastifyInstance): Promise<void> {
             messageType,
             null,
             removeReactionBody.target_hash,
+            new Date(message.data.timestamp * 1000),
+            message.signature,
+            message.signer,
+          ]
+        );
+        break;
+      }
+
+      case STORY_ADD: {
+        const s = body as {
+          media_hash?: string;
+          caption?: string;
+          music?: string;
+        };
+        if (!s.media_hash || !MEDIA_HASH_RE.test(s.media_hash)) {
+          return reply.status(400).send({
+            error: "media_hash is required and must be 64-char lowercase hex",
+          });
+        }
+        const caption = (s.caption ?? "").trim() || null;
+        if (caption && caption.length > MAX_STORY_CAPTION_LEN) {
+          return reply.status(400).send({
+            error: `caption exceeds max length ${MAX_STORY_CAPTION_LEN}`,
+          });
+        }
+        const music = (s.music ?? "").trim() || null;
+        if (music && music.length > MAX_STORY_MUSIC_LEN) {
+          return reply.status(400).send({
+            error: `music exceeds max length ${MAX_STORY_MUSIC_LEN}`,
+          });
+        }
+        const createdAt = new Date(message.data.timestamp * 1000);
+        const expiresAt = new Date(createdAt.getTime() + STORY_EXPIRY_HOURS * 3600 * 1000);
+        await db.query(
+          `INSERT INTO stories
+             (hash, author_tid, media_hash, caption, music,
+              signature, signer, created_at, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (hash) DO NOTHING`,
+          [
+            message.hash,
+            message.data.tid,
+            s.media_hash,
+            caption,
+            music,
+            message.signature,
+            message.signer,
+            createdAt,
+            expiresAt,
+          ]
+        );
+        break;
+      }
+
+      case STORY_VIEW: {
+        const sv = body as { story_hash?: string };
+        if (!sv.story_hash) {
+          return reply.status(400).send({
+            error: "story_hash is required for STORY_VIEW",
+          });
+        }
+        // Idempotent — re-viewing a story keeps the original view
+        // timestamp. Authors who care about "first seen" semantics see
+        // the same row no matter how many times the viewer scrubs back.
+        await db.query(
+          `INSERT INTO story_views
+             (story_hash, viewer_tid, viewed_at, signature, signer)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (story_hash, viewer_tid) DO NOTHING`,
+          [
+            sv.story_hash,
+            message.data.tid,
             new Date(message.data.timestamp * 1000),
             message.signature,
             message.signer,

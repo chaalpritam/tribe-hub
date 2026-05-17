@@ -35,6 +35,8 @@ export const MessageType = {
   DM_GROUP_ADD_MEMBER: 30,
   DM_GROUP_REMOVE_MEMBER: 31,
   DM_GROUP_DELETE: 32,
+  STORY_ADD: 33,
+  STORY_VIEW: 34,
 } as const;
 
 export type MessageTypeKey = keyof typeof MessageType;
